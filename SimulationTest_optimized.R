@@ -465,6 +465,7 @@ run_simulation_dataiku <- function(
       name_vec <- character(0)
       park_vec <- integer(0)
       expd_vec <- numeric(0)
+      pog_vec <- numeric(0)
       while (k < length(meta_prepared$Variable) + 1L) {
         # Parse the metadata variable the same way as your original code, but safely.
         # (The original nested unlist/strsplit expression is easy to break with parentheses.)
@@ -515,20 +516,27 @@ run_simulation_dataiku <- function(
         name_vec <- c(name_vec, eddie)
         park_vec <- c(park_vec, pahk)
         expd_vec <- c(expd_vec, expd1)
+        pog_vec <- c(pog_vec, meta_prepared$POG[k])
         k <- k + 1L
       }
-      meta_preparedPOG <- data.frame(name = name_vec, Park = park_vec, POG = meta_prepared$POG, expd = expd_vec)
-      meta_preparedPOG <- merge(meta_preparedPOG, AttQTR, by = "Park")
-      meta_preparedPOG$NEWPOG <- meta_preparedPOG$expd * meta_preparedPOG$Factor
-      meta_preparedPOG$NEWGC <- meta_preparedPOG$Att * meta_preparedPOG$NEWPOG
-      metaPOG <- merge(meta_prepared, meta_preparedPOG[, c("Park", "name", "NEWGC")], by = c("name", "Park"))
+      # Build POG table only for the rows we actually computed (guards can skip rows).
+      metaPOG <- NULL
+      if (length(name_vec)) {
+        meta_preparedPOG <- data.frame(name = name_vec, Park = park_vec, POG = pog_vec, expd = expd_vec)
+        meta_preparedPOG <- merge(meta_preparedPOG, AttQTR, by = "Park")
+        meta_preparedPOG$NEWPOG <- meta_preparedPOG$expd * meta_preparedPOG$Factor
+        meta_preparedPOG$NEWGC <- meta_preparedPOG$Att * meta_preparedPOG$NEWPOG
+        metaPOG <- merge(meta_prepared, meta_preparedPOG[, c("Park", "name", "NEWGC")], by = c("name", "Park"))
+      }
 
       meta_prepared2 <- sqldf::sqldf(
         "select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join QTRLY_GC b on a.name=b.name and a.Park = b.Park"
       )
       setDT(meta_prepared2)
-      setDT(metaPOG)
-      meta_prepared2[metaPOG, on = c("name", "Park"), QuarterlyGuestCarried := i.NEWGC]
+      if (!is.null(metaPOG) && nrow(metaPOG)) {
+        setDT(metaPOG)
+        meta_prepared2[metaPOG, on = c("name", "Park"), QuarterlyGuestCarried := i.NEWGC]
+      }
 
       metadata <- data.frame(meta_prepared2)
       names(SurveyData) <- tolower(names(SurveyData))
