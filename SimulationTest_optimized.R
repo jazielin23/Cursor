@@ -598,7 +598,6 @@ run_simulation_dataiku <- function(
       two_Play <- .safe_rowSums_eq(SurveyData, cols_play, 2)
       one_Play <- .safe_rowSums_eq(SurveyData, cols_play, 1)
       weights_Play <- data.frame(
-        q1 = SurveyData$q1,
         one_Play = one_Play, two_Play = two_Play, three_Play = three_Play, four_Play = four_Play, five_Play = five_Play,
         Park = as.integer(SurveyData$park),
         FY = as.integer(SurveyData$FY)
@@ -612,7 +611,6 @@ run_simulation_dataiku <- function(
       two_Show <- .safe_rowSums_eq(SurveyData, cols_show, 2)
       one_Show <- .safe_rowSums_eq(SurveyData, cols_show, 1)
       weights_Show <- data.frame(
-        q1 = SurveyData$q1,
         one_Show = one_Show, two_Show = two_Show, three_Show = three_Show, four_Show = four_Show, five_Show = five_Show,
         Park = as.integer(SurveyData$park),
         FY = as.integer(SurveyData$FY)
@@ -626,7 +624,6 @@ run_simulation_dataiku <- function(
       two_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 2)
       one_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 1)
       weights_Preferred <- data.frame(
-        q1 = SurveyData$q1,
         one_Preferred = one_Preferred, two_Preferred = two_Preferred, three_Preferred = three_Preferred,
         four_Preferred = four_Preferred, five_Preferred = five_Preferred,
         Park = as.integer(SurveyData$park),
