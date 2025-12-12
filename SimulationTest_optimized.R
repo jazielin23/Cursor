@@ -544,7 +544,14 @@ run_simulation_dataiku <- function(
         meta_preparedPOG <- merge(meta_preparedPOG, AttQTR, by = "Park")
         meta_preparedPOG$NEWPOG <- meta_preparedPOG$expd * meta_preparedPOG$Factor
         meta_preparedPOG$NEWGC <- meta_preparedPOG$Att * meta_preparedPOG$NEWPOG
-        metaPOG <- merge(meta_prepared, meta_preparedPOG[, c("Park", "name", "NEWGC")], by = c("name", "Park"))
+        # Defensive selection (Dataiku schemas can introduce/rename columns)
+        need_cols_pog <- c("Park", "name", "NEWGC")
+        if (!all(need_cols_pog %in% names(meta_preparedPOG))) {
+          # Skip POG backfill if required columns are missing
+          metaPOG <- NULL
+        } else {
+          metaPOG <- merge(meta_prepared, meta_preparedPOG[, need_cols_pog], by = c("name", "Park"))
+        }
       }
 
       meta_prepared2 <- sqldf::sqldf(
@@ -554,11 +561,23 @@ run_simulation_dataiku <- function(
       # Use base merge + replacement instead.
       meta_prepared2 <- as.data.frame(meta_prepared2)
       if (!is.null(metaPOG) && nrow(metaPOG)) {
-        metaPOG2 <- metaPOG[, c("name", "Park", "NEWGC")]
-        meta_prepared2 <- merge(meta_prepared2, metaPOG2, by = c("name", "Park"), all.x = TRUE)
-        idx_fill <- is.na(meta_prepared2$QuarterlyGuestCarried) & !is.na(meta_prepared2$NEWGC)
-        meta_prepared2$QuarterlyGuestCarried[idx_fill] <- meta_prepared2$NEWGC[idx_fill]
-        meta_prepared2$NEWGC <- NULL
+        # metaPOG can be data.frame or data.table; subset safely
+        need_cols_newgc <- c("name", "Park", "NEWGC")
+        have_cols_newgc <- intersect(need_cols_newgc, names(metaPOG))
+        if (length(have_cols_newgc) < 3) {
+          # If NEWGC isn't present, skip backfill
+          metaPOG2 <- NULL
+        } else {
+          metaPOG2 <- metaPOG[, need_cols_newgc]
+        }
+        if (!is.null(metaPOG2) && nrow(metaPOG2)) {
+          meta_prepared2 <- merge(meta_prepared2, metaPOG2, by = c("name", "Park"), all.x = TRUE)
+          if ("QuarterlyGuestCarried" %in% names(meta_prepared2) && "NEWGC" %in% names(meta_prepared2)) {
+            idx_fill <- is.na(meta_prepared2$QuarterlyGuestCarried) & !is.na(meta_prepared2$NEWGC)
+            meta_prepared2$QuarterlyGuestCarried[idx_fill] <- meta_prepared2$NEWGC[idx_fill]
+            meta_prepared2$NEWGC <- NULL
+          }
+        }
       }
 
       metadata <- data.frame(meta_prepared2)
