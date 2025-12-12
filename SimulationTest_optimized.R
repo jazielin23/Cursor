@@ -464,16 +464,14 @@ run_simulation_dataiku <- function(
       park_vec <- integer(0)
       expd_vec <- numeric(0)
       while (k < length(meta_prepared$Variable) + 1L) {
-        eddie <- sub(
-          ".*_",
-          "",
-          unlist(strsplit(unlist(strsplit(unlist(strsplit(meta_prepared$Variable[k], split = c("charexp_"), fixed = TRUE)), split = c("entexp_"), fixed = TRUE)), split = c("ridesexp_"), fixed = TRUE))[1])
-        )
-        pahk <- gsub(
-          "_.*",
-          "",
-          unlist(strsplit(unlist(strsplit(unlist(strsplit(meta_prepared$Variable[k], split = c("charexp_"), fixed = TRUE)), split = c("entexp_"), fixed = TRUE)), split = c("ridesexp_"), fixed = TRUE))[1])
-        )
+        # Parse the metadata variable the same way as your original code, but safely.
+        # (The original nested unlist/strsplit expression is easy to break with parentheses.)
+        var_k <- as.character(meta_prepared$Variable[k])
+        tmp1 <- strsplit(var_k, "charexp_", fixed = TRUE)[[1]][1]
+        tmp1 <- strsplit(tmp1, "entexp_", fixed = TRUE)[[1]][1]
+        tmp1 <- strsplit(tmp1, "ridesexp_", fixed = TRUE)[[1]][1]
+        eddie <- sub(".*_", "", tmp1)
+        pahk <- gsub("_.*", "", tmp1)
         if (pahk == "dak") pahk <- 4
         if (pahk == "mk") pahk <- 1
         if (pahk == "ec") pahk <- 2
