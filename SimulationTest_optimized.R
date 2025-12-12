@@ -321,3 +321,303 @@ as_Park_LifeStage_QTR <- function(dt, park_col = "park", life_col = "newgroup", 
   setnames(dt, c(park_col, life_col, qtr_col), c("Park", "LifeStage", "QTR"), skip_absent = TRUE)
   dt[]
 }
+
+# ======================================================================================
+# Dataiku-ready runner
+# ======================================================================================
+#
+# Paste this whole file into a Dataiku R recipe, or keep it as a project library.
+#
+# Expected inputs (same names as your original script):
+# - MetaDataFinalTaxonomy, Attendance, GuestCarriedFinal, FY24_prepared, Charcter_Entertainment_POG, DT, EARS_Taxonomy
+#
+# Output:
+# - returns a data.frame `Simulation_Results`
+# - optionally writes to an output dataset if `output_dataset` is provided
+#
+run_simulation_dataiku <- function(
+    n_runs = 10L,
+    num_cores = 5L,
+    yearauto = 2024L,
+    park_for_sim = 1L,
+    exp_name = c("tron"),
+    exp_date_ranges = list(tron = c("2023-10-11", "2025-09-02")),
+    maxFQ = 4L,
+    output_dataset = NULL
+) {
+  suppressPackageStartupMessages({
+    library(dataiku)
+    library(foreach)
+    library(doParallel)
+    library(data.table)
+    library(dplyr)
+    library(nnet)
+    library(sqldf)
+    library(reshape2)
+  })
+
+  # ---- Read inputs once (BIG speed win vs reading inside workers) ----
+  meta_prepared_new <- dkuReadDataset("MetaDataFinalTaxonomy")
+  AttQTR_new <- dkuReadDataset("Attendance")
+  QTRLY_GC_new <- dkuReadDataset("GuestCarriedFinal")
+  SurveyData_new <- dkuReadDataset("FY24_prepared")
+  POG_new <- dkuReadDataset("Charcter_Entertainment_POG") # kept for parity (used elsewhere in your flow)
+  DT <- dkuReadDataset("DT")
+  EARS <- dkuReadDataset("EARS_Taxonomy")
+
+  # Normalize column names once
+  SurveyData_new <- as.data.frame(SurveyData_new)
+  names(SurveyData_new) <- tolower(names(SurveyData_new))
+
+  # Parallel setup
+  cl <- makeCluster(as.integer(num_cores))
+  doParallel::registerDoParallel(cl)
+  on.exit({
+    try(stopCluster(cl), silent = TRUE)
+  }, add = TRUE)
+
+  # ---- Parallel runs ----
+  EARSTotal_list <- foreach(
+    run = 1:as.integer(n_runs),
+    .combine = rbind,
+    .packages = c("dataiku", "data.table", "dplyr", "nnet", "sqldf", "reshape2")
+  ) %dopar% {
+    # Local copies in each worker
+    SurveyData <- SurveyData_new
+    meta_prepared <- meta_prepared_new
+
+    # --- your original newgroup cleanup ---
+    SurveyData$newgroup <- SurveyData$newgroup1
+    SurveyData$newgroup[SurveyData$newgroup == 4] <- 3
+    SurveyData$newgroup[SurveyData$newgroup == 5] <- 4
+    SurveyData$newgroup[SurveyData$newgroup == 6] <- 5
+    SurveyData$newgroup[SurveyData$newgroup == 7] <- 5
+
+    # --- Monte Carlo simulation block (kept same logic, fewer re-reads) ---
+    park <- as.integer(park_for_sim)
+    for (name in exp_name) {
+      matched_row <- meta_prepared[meta_prepared$name == name & meta_prepared$Park == park, ]
+      if (!nrow(matched_row)) next
+
+      exp_ride_col <- matched_row$Variable
+      exp_group_col <- matched_row$SPEC
+
+      ride_exists <- exp_ride_col %in% colnames(SurveyData)
+      group_exists <- exp_group_col %in% colnames(SurveyData)
+      if (!ride_exists) next
+
+      segments <- unique(SurveyData$newgroup[SurveyData$park == park])
+      date_range <- exp_date_ranges[[name]]
+      if (is.null(date_range)) next
+
+      for (seg in segments) {
+        seg_idx <- which(
+          SurveyData$park == park &
+            SurveyData$newgroup == seg &
+            SurveyData$visdate_parsed >= as.Date(date_range[1]) &
+            SurveyData$visdate_parsed <= as.Date(date_range[2])
+        )
+        if (!length(seg_idx)) next
+        seg_data <- SurveyData[seg_idx, , drop = FALSE]
+
+        if (group_exists) {
+          for (wanted in c(1, 0)) {
+            to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
+            pool_idx <- which(is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
+            if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
+              sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
+              SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+            }
+          }
+        } else {
+          to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]))
+          pool_idx <- which(is.na(seg_data[[exp_ride_col]]))
+          if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
+            sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
+            SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+          }
+        }
+      }
+    }
+
+    SurveyDataSim <- SurveyData
+
+    # ---- quarterly loop ----
+    EARSTotal <- NULL
+    FQ <- 1L
+    while (FQ < as.integer(maxFQ) + 1L) {
+      SurveyData <- SurveyDataSim
+      SurveyData <- SurveyData[SurveyData$fiscal_quarter == FQ, ]
+      if (!nrow(SurveyData)) {
+        FQ <- FQ + 1L
+        next
+      }
+
+      # --- Metadata + Attendance + GC for quarter ---
+      meta_prepared <- meta_prepared_new
+      AttQTR <- AttQTR_new[AttQTR_new$FQ == FQ, ]
+      QTRLY_GC <- QTRLY_GC_new[QTRLY_GC_new$FQ == FQ, ]
+
+      # --- POG backfill (kept from your script, but computed once) ---
+      k <- 1L
+      name_vec <- character(0)
+      park_vec <- integer(0)
+      expd_vec <- numeric(0)
+      while (k < length(meta_prepared$Variable) + 1L) {
+        eddie <- sub(
+          ".*_",
+          "",
+          unlist(strsplit(unlist(strsplit(unlist(strsplit(meta_prepared$Variable[k], split = c("charexp_"), fixed = TRUE)), split = c("entexp_"), fixed = TRUE)), split = c("ridesexp_"), fixed = TRUE))[1])
+        )
+        pahk <- gsub(
+          "_.*",
+          "",
+          unlist(strsplit(unlist(strsplit(unlist(strsplit(meta_prepared$Variable[k], split = c("charexp_"), fixed = TRUE)), split = c("entexp_"), fixed = TRUE)), split = c("ridesexp_"), fixed = TRUE))[1])
+        )
+        if (pahk == "dak") pahk <- 4
+        if (pahk == "mk") pahk <- 1
+        if (pahk == "ec") pahk <- 2
+        if (pahk == "dhs") pahk <- 3
+
+        expd1 <- sum(SurveyData[, meta_prepared$Variable[k]] > 0, na.rm = TRUE) / nrow(SurveyData[SurveyData$park == pahk, ])
+        name_vec <- c(name_vec, eddie)
+        park_vec <- c(park_vec, pahk)
+        expd_vec <- c(expd_vec, expd1)
+        k <- k + 1L
+      }
+      meta_preparedPOG <- data.frame(name = name_vec, Park = park_vec, POG = meta_prepared$POG, expd = expd_vec)
+      meta_preparedPOG <- merge(meta_preparedPOG, AttQTR, by = "Park")
+      meta_preparedPOG$NEWPOG <- meta_preparedPOG$expd * meta_preparedPOG$Factor
+      meta_preparedPOG$NEWGC <- meta_preparedPOG$Att * meta_preparedPOG$NEWPOG
+      metaPOG <- merge(meta_prepared, meta_preparedPOG[, c("Park", "name", "NEWGC")], by = c("name", "Park"))
+
+      meta_prepared2 <- sqldf::sqldf(
+        "select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join QTRLY_GC b on a.name=b.name and a.Park = b.Park"
+      )
+      setDT(meta_prepared2)
+      setDT(metaPOG)
+      meta_prepared2[metaPOG, on = c("name", "Park"), QuarterlyGuestCarried := i.NEWGC]
+
+      metadata <- data.frame(meta_prepared2)
+      names(SurveyData) <- tolower(names(SurveyData))
+      SurveyData[is.na(SurveyData)] <- 0
+      SurveyData <- cbind(SurveyData, FY = yearauto)
+
+      # ==================================================================================
+      # Your multinom/GLM block to construct `weights22` + `CantRideWeight22` goes here.
+      # Kept as-is from your original script (not reprinted here to keep this file usable).
+      #
+      # REQUIREMENT:
+      # - after this block finishes, you must have:
+      #   - weights22 : data.frame with numeric weights in columns 3:7
+      #   - CantRideWeight22 : data.frame/matrix with numeric weights in columns 3:7 and 4 rows (parks 1..4)
+      # ==================================================================================
+      stop("Paste your existing park-weight model code to produce `weights22` and `CantRideWeight22` before continuing.")
+
+      # --- From here down is fully optimized replacement for the giant loop/aggregate section ---
+
+      # Prep
+      metadata$POG[(metadata$Type == "Show" & is.na(metadata$POG) | metadata$Type == "Play" & is.na(metadata$POG))] <- 0
+      metadata <- metadata[!is.na(metadata$Category1) | metadata$Type == "Ride", ]
+
+      SurveyData22 <- SurveyData
+      CountData22 <- SurveyData22
+
+      # Normalize metadata columns for consistent matching
+      metadata[, 2] <- tolower(metadata[, 2])
+      if (ncol(metadata) >= 3) metadata[, 3] <- tolower(metadata[, 3])
+      if (ncol(metadata) >= 18) metadata[, 18] <- tolower(metadata[, 18])
+      if (ncol(metadata) >= 19) metadata[, 19] <- tolower(metadata[, 19])
+
+      # (A) Ride-again fix (same as your loop, vectorized per-column still ok)
+      rideagain_fix <- metadata[, 3]
+      rideexp_fix <- metadata[, 2]
+      rideagain <- rideagain_fix[!is.na(rideagain_fix)]
+      rideexp <- rideexp_fix[!is.na(rideagain_fix)]
+      if (length(rideagain)) {
+        for (i in seq_along(rideagain)) {
+          if (rideexp[i] %in% names(SurveyData22) && rideagain[i] %in% names(SurveyData22)) {
+            idx <- which(SurveyData22[, rideexp[i]] != 0 & SurveyData22[, rideagain[i]] == 0)
+            if (length(idx)) SurveyData22[idx, rideagain[i]] <- 1
+          }
+        }
+      }
+
+      # (B) Character how-experience gating (kept from your script)
+      charexp <- sub(".*_", "", na.omit(sub(".*charexp_", "", grep("charexp_", metadata[, 2], value = TRUE, fixed = TRUE))))
+      howexp <- paste("charhow", charexp, sep = "_")
+      howexp <- howexp[howexp != "charhow_NA"]
+      ch_cols <- grep("charexp_", names(SurveyData22), value = TRUE)
+      if (length(ch_cols) && length(howexp)) {
+        for (i in seq_len(min(length(ch_cols), length(howexp)))) {
+          if (howexp[i] %in% names(SurveyData22)) {
+            SurveyData22[, ch_cols[i]] <- SurveyData22[, ch_cols[i]] * as.numeric(
+              SurveyData22[, howexp[i]] < 2 | SurveyData22[, howexp[i]] == 3 | SurveyData22[, howexp[i]] == 4
+            )
+          }
+        }
+      }
+
+      # (C) Can't-ride sentinel conversion (-1) for rides (same logic)
+      rideagainx <- metadata[, 18]
+      RIDEX <- metadata[which(!is.na(metadata[, 18])), 2]
+      rideagainx <- tolower(rideagainx[!is.na(rideagainx)])
+      RIDEX <- tolower(RIDEX[!is.na(RIDEX)])
+      if (length(RIDEX)) {
+        for (i in seq_along(RIDEX)) {
+          if (RIDEX[i] %in% names(SurveyData22) && rideagainx[i] %in% names(SurveyData22)) {
+            idx <- which(SurveyData22[, RIDEX[i]] == 0 & SurveyData22[, rideagainx[i]] == 1 & SurveyData22$ovpropex < 6)
+            if (length(idx)) SurveyData22[idx, RIDEX[i]] <- -1
+          }
+        }
+      }
+
+      # (D) Apply weights (fast) and build CountData (fast)
+      SurveyData22 <- apply_weights_fast(SurveyData22, metadata = metadata, weights22 = weights22, CantRideWeight22 = CantRideWeight22, FQ = FQ)
+      CountData22 <- apply_counts_fast(CountData22, metadata = metadata, FQ = FQ)
+
+      # (E) Summaries (fast)
+      ride_bases <- unique(.base_name(tolower(metadata$Variable[metadata$Type == "Ride"])))
+      ride_bases <- ride_bases[!is.na(ride_bases) & ride_bases != ""]
+
+      Ride_Runs20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(SurveyData22, ride_bases, "2"))
+      Ride_Against20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(SurveyData22, ride_bases, "3"))
+      Ride_OriginalRuns20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(CountData22, ride_bases, "2"))
+      Ride_OriginalAgainst20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(CountData22, ride_bases, "3"))
+
+      Show_Runs20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Show", suffix = "2"))
+      Show_Against20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Show", suffix = "3"))
+      Show_OriginalRuns20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(CountData22, metadata, type = "Show", suffix = "2"))
+      Show_OriginalAgainst20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(CountData22, metadata, type = "Show", suffix = "3"))
+
+      Play_Runs20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Play", suffix = "2"))
+      Play_Against20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Play", suffix = "3"))
+      Play_OriginalRuns20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(CountData22, metadata, type = "Play", suffix = "2"))
+      Play_OriginalAgainst20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(CountData22, metadata, type = "Play", suffix = "3"))
+
+      # ==================================================================================
+      # Keep your downstream wRAA/EARS computation logic here (melt -> wRAA_Table -> merge EARS -> EARSx).
+      # You can reuse your exact code, just swap in these objects:
+      # - Ride_Runs20, Ride_Against20, Ride_OriginalRuns20, Ride_OriginalAgainst20
+      # - Show_Runs20, Show_Against20, Show_OriginalRuns20, Show_OriginalAgainst20
+      # - Play_Runs20, Play_Against20, Play_OriginalRuns20, Play_OriginalAgainst20
+      # ==================================================================================
+      stop("Paste your downstream wRAA/EARS build code here, then rbind into `EARSTotal` and increment FQ.")
+    }
+
+    # Attach run id
+    if (is.null(EARSTotal)) {
+      return(data.frame())
+    }
+    EARSTotal$sim_run <- run
+    EARSTotal
+  }
+
+  Simulation_Results <- EARSTotal_list
+
+  if (!is.null(output_dataset)) {
+    try(dkuWriteDataset(output_dataset, Simulation_Results), silent = TRUE)
+  }
+
+  Simulation_Results
+}
