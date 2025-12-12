@@ -510,7 +510,152 @@ run_simulation_dataiku <- function(
       #   - weights22 : data.frame with numeric weights in columns 3:7
       #   - CantRideWeight22 : data.frame/matrix with numeric weights in columns 3:7 and 4 rows (parks 1..4)
       # ==================================================================================
-      stop("Paste your existing park-weight model code to produce `weights22` and `CantRideWeight22` before continuing.")
+      # =========================
+      # Build weights22 + CantRideWeight22 (embedded from your original script)
+      # =========================
+
+      .safe_rowSums_eq <- function(df, cols, value) {
+        cols <- intersect(tolower(cols), names(df))
+        if (!length(cols)) return(rep(0, nrow(df)))
+        rowSums(df[, cols, drop = FALSE] == value, na.rm = TRUE)
+      }
+
+      # Ensure lower names
+      names(SurveyData) <- tolower(names(SurveyData))
+      metadata <- as.data.frame(metadata)
+
+      # ---- Play ----
+      cols_play <- metadata[metadata$Type == "Play", 2]
+      five_Play <- .safe_rowSums_eq(SurveyData, cols_play, 5)
+      four_Play <- .safe_rowSums_eq(SurveyData, cols_play, 4)
+      three_Play <- .safe_rowSums_eq(SurveyData, cols_play, 3)
+      two_Play <- .safe_rowSums_eq(SurveyData, cols_play, 2)
+      one_Play <- .safe_rowSums_eq(SurveyData, cols_play, 1)
+      weights_Play <- data.frame(cbind(
+        q1 = SurveyData$q1, one_Play, two_Play, three_Play, four_Play, five_Play,
+        Park = SurveyData$park, FY = SurveyData$FY
+      ))
+
+      # ---- Show ----
+      cols_show <- metadata[metadata$Type == "Show", 2]
+      five_Show <- .safe_rowSums_eq(SurveyData, cols_show, 5)
+      four_Show <- .safe_rowSums_eq(SurveyData, cols_show, 4)
+      three_Show <- .safe_rowSums_eq(SurveyData, cols_show, 3)
+      two_Show <- .safe_rowSums_eq(SurveyData, cols_show, 2)
+      one_Show <- .safe_rowSums_eq(SurveyData, cols_show, 1)
+      weights_Show <- data.frame(cbind(
+        q1 = SurveyData$q1, one_Show, two_Show, three_Show, four_Show, five_Show,
+        Park = SurveyData$park, FY = SurveyData$FY
+      ))
+
+      # ---- Preferred (Flaship/Anchor) ----
+      cols_pref <- metadata[metadata$Genre == "Flaship" | metadata$Genre == "Anchor", 2]
+      five_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 5)
+      four_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 4)
+      three_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 3)
+      two_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 2)
+      one_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 1)
+      weights_Preferred <- data.frame(cbind(
+        q1 = SurveyData$q1, one_Preferred, two_Preferred, three_Preferred, four_Preferred, five_Preferred,
+        Park = SurveyData$park, FY = SurveyData$FY
+      ))
+
+      # ---- Rides / Att ----
+      cols_ride <- metadata[metadata$Type == "Ride", 2]
+      five_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 5)
+      four_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 4)
+      three_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 3)
+      two_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 2)
+      one_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 1)
+
+      # ---- can't-get-on ----
+      idx_cr <- which(!is.na(metadata[, 18]) & metadata[, 18] != "")
+      CouldntRide <- tolower(metadata[idx_cr, 18])
+      Experience <- tolower(metadata[idx_cr, 2])
+      CouldntRide <- intersect(CouldntRide, names(SurveyData))
+      Experience <- intersect(Experience, names(SurveyData))
+
+      cantgeton <- rep(0, nrow(SurveyData))
+      if (length(Experience) && length(CouldntRide) && length(Experience) == length(CouldntRide)) {
+        Xexp <- as.matrix(SurveyData[, Experience, drop = FALSE])
+        Xcant <- as.matrix(SurveyData[, CouldntRide, drop = FALSE])
+        ov_ok <- SurveyData$ovpropex < 6
+        cantgeton <- rowSums(
+          (Xexp == 0) & (Xcant == 1) & matrix(ov_ok, nrow = nrow(SurveyData), ncol = ncol(Xexp)),
+          na.rm = TRUE
+        )
+      }
+      cant <- data.frame(cbind(ovpropex = SurveyData$ovpropex, cantgeton, Park = SurveyData$park, FY = SurveyData$FY))
+
+      weights_RA <- data.frame(cbind(
+        ovpropex = SurveyData$ovpropex,
+        one_RA, two_RA, three_RA, four_RA, five_RA,
+        Park = SurveyData$park, FY = SurveyData$FY
+      ))
+
+      weights <- cbind(weights_Play, weights_Show, weights_RA, cant, weights_Preferred)
+
+      build_park_weights <- function(park_id, conf_level, conf_label) {
+        w <- weights
+        w$ovpropex <- relevel(factor(w$ovpropex), ref = "5")
+        w <- w[w$Park == park_id & w$FY == yearauto, ]
+
+        test <- multinom(
+          ovpropex ~ cantgeton +
+            one_Play + two_Play + three_Play + four_Play + five_Play +
+            one_Show + two_Show + three_Show + four_Show + five_Show +
+            one_RA + two_RA + three_RA + four_RA + five_RA +
+            one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred,
+          data = w
+        )
+
+        odds <- exp(confint(test, level = conf_level))
+        z1 <- apply(odds, 3L, c)
+        z2 <- expand.grid(dimnames(odds)[1:2])
+
+        jz <- glm(
+          (ovpropex == 5) ~
+            one_Play + two_Play + three_Play + four_Play + five_Play +
+            one_Show + two_Show + three_Show + four_Show + five_Show +
+            one_RA + two_RA + three_RA + four_RA + five_RA +
+            one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred,
+          data = w, family = "binomial"
+        )
+        EXPcol <- exp(jz$coefficients[-1])
+
+        df_all <- data.frame(z2, z1)
+
+        weightedEEs_part <- data.frame(
+          df_all[df_all$Var2 == conf_label & df_all$Var1 != "(Intercept)" & df_all$Var1 != "Attend" & df_all$Var1 != "cantgeton", ][1:15, ],
+          X5 = EXPcol[1:15]
+        )
+        weightedEEs_part[weightedEEs_part$Var1 == "five_Play", 3:7] <- weightedEEs_part[weightedEEs_part$Var1 == "five_Play", 3:7] * 1
+        weightedEEs_part[weightedEEs_part$Var1 == "five_Show", 3:7] <- weightedEEs_part[weightedEEs_part$Var1 == "five_Show", 3:7] * 1
+
+        cantride_part <- data.frame(df_all[df_all$Var2 == conf_label & df_all$Var1 == "cantgeton", ], X5 = rep(1, 1))
+        pref_part <- data.frame(
+          df_all[df_all$Var2 == conf_label & df_all$Var1 != "(Intercept)" & df_all$Var1 != "Attend" & df_all$Var1 != "cantgeton", ][16:20, ],
+          X5 = EXPcol[16:20]
+        )
+
+        list(weightedEEs = weightedEEs_part, cantride = cantride_part, pref = pref_part)
+      }
+
+      mk <- build_park_weights(1, 0.995, "99.8 %")
+      ep <- build_park_weights(2, 0.99, "99.5 %")
+      dhs <- build_park_weights(3, 0.80, "90 %")
+      dak <- build_park_weights(4, 0.70, "15 %")
+
+      weightedEEs <- rbind(mk$weightedEEs, ep$weightedEEs, dhs$weightedEEs, dak$weightedEEs)
+      cantride2 <- data.frame(FY = yearauto, rbind(mk$cantride, ep$cantride, dhs$cantride, dak$cantride))
+
+      weightsPref1 <- mk$pref
+      weightsPref2 <- ep$pref
+      weightsPref3 <- dhs$pref
+      weightsPref4 <- dak$pref
+
+      weights22 <- rbind(weightedEEs, weightsPref1, weightsPref2, weightsPref3, weightsPref4)
+      CantRideWeight22 <- cantride2[, -1, drop = FALSE]
 
       # --- From here down is fully optimized replacement for the giant loop/aggregate section ---
 
@@ -600,7 +745,115 @@ run_simulation_dataiku <- function(
       # - Show_Runs20, Show_Against20, Show_OriginalRuns20, Show_OriginalAgainst20
       # - Play_Runs20, Play_Against20, Play_OriginalRuns20, Play_OriginalAgainst20
       # ==================================================================================
-      stop("Paste your downstream wRAA/EARS build code here, then rbind into `EARSTotal` and increment FQ.")
+      # =========================
+      # Build wRAA_Table + EARS (embedded from your original logic)
+      # =========================
+
+      # ---- Ride long ----
+      one <- reshape2::melt(Ride_OriginalRuns20, id = c("Park", "LifeStage", "QTR"))
+      two <- reshape2::melt(Ride_OriginalAgainst20, id = c("Park", "LifeStage", "QTR"))
+      three <- reshape2::melt(Ride_Runs20, id = c("Park", "LifeStage", "QTR"))
+      four <- reshape2::melt(Ride_Against20, id = c("Park", "LifeStage", "QTR"))
+
+      Ride <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
+      Ride <- unique(Ride[apply(Ride != 0, 1, all), ])
+      names(Ride) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
+      Ride$Genre <- "Ride"
+
+      # ---- Show long ----
+      one <- reshape2::melt(Show_OriginalRuns20, id = c("Park", "LifeStage", "QTR"))
+      two <- reshape2::melt(Show_OriginalAgainst20, id = c("Park", "LifeStage", "QTR"))
+      three <- reshape2::melt(Show_Runs20, id = c("Park", "LifeStage", "QTR"))
+      four <- reshape2::melt(Show_Against20, id = c("Park", "LifeStage", "QTR"))
+
+      Show <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
+      Show <- Show[!is.na(Show$Park), ]
+      Show <- unique(Show[apply(Show != 0, 1, all), ])
+      names(Show) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
+      Show$Genre <- "Show"
+
+      # ---- Play long ----
+      one <- reshape2::melt(Play_OriginalRuns20, id = c("Park", "LifeStage", "QTR"))
+      two <- reshape2::melt(Play_OriginalAgainst20, id = c("Park", "LifeStage", "QTR"))
+      three <- reshape2::melt(Play_Runs20, id = c("Park", "LifeStage", "QTR"))
+      four <- reshape2::melt(Play_Against20, id = c("Park", "LifeStage", "QTR"))
+
+      Play <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
+      Play <- unique(Play[apply(Play != 0, 1, all), ])
+      names(Play) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
+      Play <- Play[Play$NAME != "Park.1" & Play$NAME != "LifeStage.1" & Play$NAME != "QTR.1", ]
+      Play$Genre <- "Play"
+
+      wRAA_Table <- rbind(Ride, Show, Play)
+
+      twox <- wRAA_Table %>%
+        group_by(NAME, Park, Genre, QTR, LifeStage) %>%
+        summarise(
+          Original_RS = sum(Original_RS),
+          Original_RA = sum(Original_RA),
+          wEE = sum(wEE),
+          wEEx = sum(wEEx),
+          .groups = "drop"
+        )
+
+      onex <- twox %>%
+        group_by(NAME, Park, QTR, LifeStage) %>%
+        mutate(sum = sum(Original_RS + Original_RA)) %>%
+        ungroup()
+      onex$Percent <- (onex$Original_RS + onex$Original_RA) / onex$sum
+
+      wRAA_Table <- twox %>%
+        left_join(onex %>% select(NAME, Park, QTR, LifeStage, Percent), by = c("NAME", "Park", "QTR", "LifeStage"))
+      wRAA_Table <- wRAA_Table[!is.na(wRAA_Table$Park), ]
+
+      wRAA_Table <- cbind(wRAA_Table, wOBA = wRAA_Table$wEE / (wRAA_Table$Original_RS + wRAA_Table$Original_RA))
+
+      wRAA_Table <- merge(
+        x = wRAA_Table,
+        y = aggregate(wRAA_Table$Original_RS, by = list(QTR = wRAA_Table$QTR, Park = wRAA_Table$Park), FUN = sum),
+        by = c("QTR", "Park"), all.x = TRUE
+      )
+      names(wRAA_Table)[ncol(wRAA_Table)] <- "OBP1"
+
+      wRAA_Table <- merge(
+        x = wRAA_Table,
+        y = aggregate(wRAA_Table$Original_RA, by = list(QTR = wRAA_Table$QTR, Park = wRAA_Table$Park), FUN = sum),
+        by = c("QTR", "Park"), all.x = TRUE
+      )
+      names(wRAA_Table)[ncol(wRAA_Table)] <- "OBP2"
+      wRAA_Table$OBP <- wRAA_Table$OBP1 / (wRAA_Table$OBP1 + wRAA_Table$OBP2)
+
+      wRAA_Table <- merge(
+        x = wRAA_Table,
+        y = aggregate(wRAA_Table$wOBA, by = list(QTR = wRAA_Table$QTR, Park = wRAA_Table$Park), FUN = median),
+        by = c("QTR", "Park"), all.x = TRUE
+      )
+      names(wRAA_Table)[ncol(wRAA_Table)] <- "wOBA_Park"
+      wRAA_Table <- data.frame(wRAA_Table, wOBA_Scale = wRAA_Table$wOBA_Park / wRAA_Table$OBP)
+
+      # ---- Merge EARS taxonomy columns onto wRAA_Table ----
+      join_keys <- c("NAME", "Park", "Genre", "QTR", "LifeStage")
+      table2_nodup <- EARS[, setdiff(names(EARS), setdiff(names(wRAA_Table), join_keys)), drop = FALSE]
+      EARSFinal_Final <- merge(wRAA_Table, table2_nodup, by = join_keys, all = FALSE)
+
+      # ---- Compute EARS for this quarter ----
+      EARSx <- EARSFinal_Final
+      agc_col <- if ("AnnualGuestsCarried" %in% names(EARSx)) {
+        "AnnualGuestsCarried"
+      } else if ("wRAA_Table.AnnualGuestsCarried" %in% names(EARSx)) {
+        "wRAA_Table.AnnualGuestsCarried"
+      } else {
+        stop("Missing AnnualGuestsCarried column after merge.")
+      }
+
+      EARSx$wRAA <- ((EARSx$wOBA - EARSx$wOBA_Park) / EARSx$wOBA_Scale) * EARSx[[agc_col]]
+      EARSx$EARS <- EARSx$wRAA / EARSx$RPW
+      EARSx$EARS <- (EARSx$EARS + EARSx$replacement) * EARSx$p
+
+      EARSTotal <- rbind(EARSTotal, EARSx)
+
+      # advance quarter
+      FQ <- FQ + 1L
     }
 
     # Attach run id
