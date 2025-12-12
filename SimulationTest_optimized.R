@@ -410,7 +410,8 @@ run_simulation_dataiku <- function(
       ".as_int_ov", ".base_name", ".score_vectors",
       "apply_weights_fast", "apply_counts_fast",
       "summarize_wide_by_group", "summarize_category_wide_by_group",
-      "as_Park_LifeStage_QTR"
+      "as_Park_LifeStage_QTR",
+      "strip_measure_suffix"
     )
   ) %dopar% {
     # Local copies in each worker
