@@ -222,7 +222,11 @@ apply_counts_fast <- function(dt, metadata, FQ) {
       # can't-ride sentinel mirrors your CountData logic
       idx_cr <- which(x == -1L & ov_ok[rows_p])
       if (length(idx_cr)) {
-        out3[idx_cr] <- -1 * x[idx_cr]  # => 1
+        # Match your original CountData behavior:
+        # - if ovpropex == 5: out3 =  1 * x  => -1
+        # - else:           out3 = -1 * x  =>  1
+        ov_sub <- ov[rows_p][idx_cr]
+        out3[idx_cr] <- ifelse(ov_sub == 5L, 1L * x[idx_cr], -1L * x[idx_cr])
       }
 
       set(dt, i = rows_p, j = mp$col2[r], value = out2)
