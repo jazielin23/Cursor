@@ -399,11 +399,13 @@ run_simulation_dataiku <- function(
       matched_row <- meta_prepared[meta_prepared$name == name & meta_prepared$Park == park, ]
       if (!nrow(matched_row)) next
 
-      exp_ride_col <- matched_row$Variable
-      exp_group_col <- matched_row$SPEC
+      # Be defensive: meta rows can have duplicates/NA; ensure scalar, lowercased column name.
+      exp_ride_col <- tolower(as.character(matched_row$Variable[1]))
+      exp_group_col <- tolower(as.character(matched_row$SPEC[1]))
 
-      ride_exists <- exp_ride_col %in% colnames(SurveyData)
-      group_exists <- exp_group_col %in% colnames(SurveyData)
+      # `%in%` can yield NA if exp_* is NA; force scalar TRUE/FALSE
+      ride_exists <- isTRUE(!is.na(exp_ride_col) && nzchar(exp_ride_col) && exp_ride_col %in% colnames(SurveyData))
+      group_exists <- isTRUE(!is.na(exp_group_col) && nzchar(exp_group_col) && exp_group_col %in% colnames(SurveyData))
       if (!ride_exists) next
 
       segments <- unique(SurveyData$newgroup[SurveyData$park == park])
