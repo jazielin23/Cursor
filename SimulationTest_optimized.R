@@ -267,10 +267,12 @@ summarize_category_wide_by_group <- function(
   if (!"Variable" %in% names(m)) stop("metadata must have column `Variable`")
   if (!"Type" %in% names(m)) stop("metadata must have column `Type`")
   if (!"Category1" %in% names(m)) stop("metadata must have column `Category1`")
+  if (!"Park" %in% names(m)) stop("metadata must have column `Park`")
 
   m[, Variable := tolower(Variable)]
   m[, Type := as.character(Type)]
   if ("Genre" %in% names(m)) m[, Genre := as.character(Genre)]
+  m[, Park := suppressWarnings(as.integer(Park))]
 
   m <- m[Type == type & !is.na(Category1) & Category1 != ""]
   if (!nrow(m)) {
@@ -285,8 +287,12 @@ summarize_category_wide_by_group <- function(
 
   m[, base := .base_name(Variable)]
 
-  # Build mapping from base -> Category1 (dedupe).
-  map <- unique(m[, .(base, Category1)])
+  # Build mapping from (park, base) -> Category1.
+  # IMPORTANT: base names can collide across parks; also metadata can have duplicates.
+  # We de-duplicate to one Category1 per (park, base) to avoid cartesian joins.
+  map <- m[!is.na(Park) & Park %in% 1:4, .(park = Park, base, Category1)]
+  map <- map[!is.na(base) & nzchar(base) & !is.na(Category1) & nzchar(Category1)]
+  map <- map[, .SD[1], by = .(park, base)]
 
   # Columns available in dt
   bases <- unique(map$base)
@@ -307,7 +313,10 @@ summarize_category_wide_by_group <- function(
   )
   long <- as.data.table(long)
   long[, base := sub(paste0(suffix, "$"), "", var)]
-  long <- long[map, on = "base", nomatch = 0L]
+  # Join by park+base (prevents collisions and cartesian expansion).
+  # Keep only rows with a valid mapping.
+  if (!"park" %in% names(long)) stop("group_cols must include 'park' for category summaries")
+  long <- merge(long, map, by = c("park", "base"), all = FALSE)
 
   # Aggregate by category
   agg <- long[, .(val = sum(val, na.rm = TRUE)), by = c(group_cols, "Category1")]
