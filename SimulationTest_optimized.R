@@ -297,13 +297,15 @@ summarize_category_wide_by_group <- function(
   }
 
   # Melt only relevant columns, map to Category1 by stripping suffix.
-  long <- melt(
+  # IMPORTANT: qualify melt/dcast to data.table to avoid reshape2 masking inside Dataiku/foreach.
+  long <- data.table::melt(
     dt[, c(group_cols, cols), with = FALSE],
     id.vars = group_cols,
     variable.name = "var",
     value.name = "val",
     variable.factor = FALSE
   )
+  long <- as.data.table(long)
   long[, base := sub(paste0(suffix, "$"), "", var)]
   long <- long[map, on = "base", nomatch = 0L]
 
@@ -311,7 +313,7 @@ summarize_category_wide_by_group <- function(
   agg <- long[, .(val = sum(val, na.rm = TRUE)), by = c(group_cols, "Category1")]
 
   # Wide
-  dcast(agg, as.formula(paste(paste(group_cols, collapse = " + "), "~ Category1")), value.var = "val", fill = 0)
+  data.table::dcast(agg, as.formula(paste(paste(group_cols, collapse = " + "), "~ Category1")), value.var = "val", fill = 0)
 }
 
 # Convenience wrappers to match your downstream variable names
