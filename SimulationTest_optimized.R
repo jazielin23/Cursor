@@ -869,6 +869,11 @@ run_simulation_dataiku <- function(
             idx <- which(SurveyData22[, RIDEX[i]] == 0 & SurveyData22[, rideagainx[i]] == 1 & SurveyData22$ovpropex < 6)
             if (length(idx)) SurveyData22[idx, RIDEX[i]] <- -1
           }
+          # IMPORTANT: apply the same -1 conversion to CountData22 so Original_RA includes can't-ride events
+          if (RIDEX[i] %in% names(CountData22) && rideagainx[i] %in% names(CountData22)) {
+            idx2 <- which(CountData22[, RIDEX[i]] == 0 & CountData22[, rideagainx[i]] == 1 & CountData22$ovpropex < 6)
+            if (length(idx2)) CountData22[idx2, RIDEX[i]] <- -1
+          }
         }
       }
 
