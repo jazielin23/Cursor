@@ -380,7 +380,14 @@ run_simulation_dataiku <- function(
   EARSTotal_list <- foreach(
     run = 1:as.integer(n_runs),
     .combine = rbind,
-    .packages = c("dataiku", "data.table", "dplyr", "nnet", "sqldf", "reshape2")
+    .packages = c("dataiku", "data.table", "dplyr", "nnet", "sqldf", "reshape2"),
+    # Ensure helper functions are available on parallel workers
+    .export = c(
+      ".as_int_ov", ".base_name", ".score_vectors",
+      "apply_weights_fast", "apply_counts_fast",
+      "summarize_wide_by_group", "summarize_category_wide_by_group",
+      "as_Park_LifeStage_QTR"
+    )
   ) %dopar% {
     # Local copies in each worker
     SurveyData <- SurveyData_new
