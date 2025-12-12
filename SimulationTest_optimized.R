@@ -564,7 +564,8 @@ run_simulation_dataiku <- function(
       metadata <- data.frame(meta_prepared2)
       names(SurveyData) <- tolower(names(SurveyData))
       SurveyData[is.na(SurveyData)] <- 0
-      SurveyData <- cbind(SurveyData, FY = yearauto)
+      # Avoid cbind() coercion (can turn everything into character) — keep FY numeric.
+      SurveyData$FY <- as.integer(yearauto)
 
       # ==================================================================================
       # Your multinom/GLM block to construct `weights22` + `CantRideWeight22` goes here.
@@ -596,10 +597,12 @@ run_simulation_dataiku <- function(
       three_Play <- .safe_rowSums_eq(SurveyData, cols_play, 3)
       two_Play <- .safe_rowSums_eq(SurveyData, cols_play, 2)
       one_Play <- .safe_rowSums_eq(SurveyData, cols_play, 1)
-      weights_Play <- data.frame(cbind(
-        q1 = SurveyData$q1, one_Play, two_Play, three_Play, four_Play, five_Play,
-        Park = SurveyData$park, FY = SurveyData$FY
-      ))
+      weights_Play <- data.frame(
+        q1 = SurveyData$q1,
+        one_Play = one_Play, two_Play = two_Play, three_Play = three_Play, four_Play = four_Play, five_Play = five_Play,
+        Park = as.integer(SurveyData$park),
+        FY = as.integer(SurveyData$FY)
+      )
 
       # ---- Show ----
       cols_show <- metadata[metadata$Type == "Show", 2]
@@ -608,10 +611,12 @@ run_simulation_dataiku <- function(
       three_Show <- .safe_rowSums_eq(SurveyData, cols_show, 3)
       two_Show <- .safe_rowSums_eq(SurveyData, cols_show, 2)
       one_Show <- .safe_rowSums_eq(SurveyData, cols_show, 1)
-      weights_Show <- data.frame(cbind(
-        q1 = SurveyData$q1, one_Show, two_Show, three_Show, four_Show, five_Show,
-        Park = SurveyData$park, FY = SurveyData$FY
-      ))
+      weights_Show <- data.frame(
+        q1 = SurveyData$q1,
+        one_Show = one_Show, two_Show = two_Show, three_Show = three_Show, four_Show = four_Show, five_Show = five_Show,
+        Park = as.integer(SurveyData$park),
+        FY = as.integer(SurveyData$FY)
+      )
 
       # ---- Preferred (Flaship/Anchor) ----
       cols_pref <- metadata[metadata$Genre == "Flaship" | metadata$Genre == "Anchor", 2]
@@ -620,10 +625,13 @@ run_simulation_dataiku <- function(
       three_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 3)
       two_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 2)
       one_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 1)
-      weights_Preferred <- data.frame(cbind(
-        q1 = SurveyData$q1, one_Preferred, two_Preferred, three_Preferred, four_Preferred, five_Preferred,
-        Park = SurveyData$park, FY = SurveyData$FY
-      ))
+      weights_Preferred <- data.frame(
+        q1 = SurveyData$q1,
+        one_Preferred = one_Preferred, two_Preferred = two_Preferred, three_Preferred = three_Preferred,
+        four_Preferred = four_Preferred, five_Preferred = five_Preferred,
+        Park = as.integer(SurveyData$park),
+        FY = as.integer(SurveyData$FY)
+      )
 
       # ---- Rides / Att ----
       cols_ride <- metadata[metadata$Type == "Ride", 2]
@@ -650,13 +658,19 @@ run_simulation_dataiku <- function(
           na.rm = TRUE
         )
       }
-      cant <- data.frame(cbind(ovpropex = SurveyData$ovpropex, cantgeton, Park = SurveyData$park, FY = SurveyData$FY))
-
-      weights_RA <- data.frame(cbind(
+      cant <- data.frame(
         ovpropex = SurveyData$ovpropex,
-        one_RA, two_RA, three_RA, four_RA, five_RA,
-        Park = SurveyData$park, FY = SurveyData$FY
-      ))
+        cantgeton = cantgeton,
+        Park = as.integer(SurveyData$park),
+        FY = as.integer(SurveyData$FY)
+      )
+
+      weights_RA <- data.frame(
+        ovpropex = SurveyData$ovpropex,
+        one_RA = one_RA, two_RA = two_RA, three_RA = three_RA, four_RA = four_RA, five_RA = five_RA,
+        Park = as.integer(SurveyData$park),
+        FY = as.integer(SurveyData$FY)
+      )
 
       weights <- cbind(weights_Play, weights_Show, weights_RA, cant, weights_Preferred)
 
@@ -862,7 +876,8 @@ run_simulation_dataiku <- function(
       four <- reshape2::melt(Ride_Against20, id = c("Park", "LifeStage", "QTR"))
 
       Ride <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
-      Ride <- unique(Ride[apply(Ride != 0, 1, all), ])
+      # Keep rows where at least one metric is non-zero (the old `all` filter drops most rides).
+      Ride <- unique(Ride[rowSums(Ride[, c("Original_RS", "Original_RA", "wEE", "wEEx")] != 0, na.rm = TRUE) > 0, ])
       names(Ride) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
       Ride$Genre <- "Ride"
 
@@ -874,7 +889,7 @@ run_simulation_dataiku <- function(
 
       Show <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
       Show <- Show[!is.na(Show$Park), ]
-      Show <- unique(Show[apply(Show != 0, 1, all), ])
+      Show <- unique(Show[rowSums(Show[, c("Original_RS", "Original_RA", "wEE", "wEEx")] != 0, na.rm = TRUE) > 0, ])
       names(Show) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
       Show$Genre <- "Show"
 
@@ -885,7 +900,7 @@ run_simulation_dataiku <- function(
       four <- reshape2::melt(Play_Against20, id = c("Park", "LifeStage", "QTR"))
 
       Play <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
-      Play <- unique(Play[apply(Play != 0, 1, all), ])
+      Play <- unique(Play[rowSums(Play[, c("Original_RS", "Original_RA", "wEE", "wEEx")] != 0, na.rm = TRUE) > 0, ])
       names(Play) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
       Play <- Play[Play$NAME != "Park.1" & Play$NAME != "LifeStage.1" & Play$NAME != "QTR.1", ]
       Play$Genre <- "Play"
