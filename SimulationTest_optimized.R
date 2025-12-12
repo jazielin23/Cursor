@@ -638,47 +638,88 @@ run_simulation_dataiku <- function(
       weights <- cbind(weights_Play, weights_Show, weights_RA, cant, weights_Preferred)
 
       build_park_weights <- function(park_id, conf_level, conf_label) {
+        .defaults <- function() {
+          # Neutral fallback: all weights = 1.
+          make_df <- function(var1) {
+            data.frame(
+              Var1 = var1,
+              Var2 = rep(conf_label, length(var1)),
+              X1 = rep(1, length(var1)),
+              X2 = rep(1, length(var1)),
+              X3 = rep(1, length(var1)),
+              X4 = rep(1, length(var1)),
+              X5 = rep(1, length(var1)),
+              stringsAsFactors = FALSE
+            )
+          }
+          list(
+            weightedEEs = make_df(c(
+              "one_Play", "two_Play", "three_Play", "four_Play", "five_Play",
+              "one_Show", "two_Show", "three_Show", "four_Show", "five_Show",
+              "one_RA", "two_RA", "three_RA", "four_RA", "five_RA"
+            )),
+            cantride = make_df("cantgeton"),
+            pref = make_df(c("one_Preferred", "two_Preferred", "three_Preferred", "four_Preferred", "five_Preferred"))
+          )
+        }
+
         w <- weights
         w$ovpropex <- relevel(factor(w$ovpropex), ref = "5")
         w <- w[w$Park == park_id & w$FY == yearauto, ]
 
-        test <- multinom(
-          ovpropex ~ cantgeton +
-            one_Play + two_Play + three_Play + four_Play + five_Play +
-            one_Show + two_Show + three_Show + four_Show + five_Show +
-            one_RA + two_RA + three_RA + four_RA + five_RA +
-            one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred,
-          data = w
-        )
+        # multinom needs 2+ outcome classes; fall back to neutral weights if not available
+        n_classes <- length(unique(w$ovpropex[!is.na(w$ovpropex)]))
+        if (nrow(w) < 10 || n_classes < 2) return(.defaults())
 
-        odds <- exp(confint(test, level = conf_level))
+        test <- tryCatch(
+          multinom(
+            ovpropex ~ cantgeton +
+              one_Play + two_Play + three_Play + four_Play + five_Play +
+              one_Show + two_Show + three_Show + four_Show + five_Show +
+              one_RA + two_RA + three_RA + four_RA + five_RA +
+              one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred,
+            data = w
+          ),
+          error = function(e) NULL
+        )
+        if (is.null(test)) return(.defaults())
+
+        odds <- tryCatch(exp(confint(test, level = conf_level)), error = function(e) NULL)
+        if (is.null(odds)) return(.defaults())
         z1 <- apply(odds, 3L, c)
         z2 <- expand.grid(dimnames(odds)[1:2])
 
-        jz <- glm(
-          (ovpropex == 5) ~
-            one_Play + two_Play + three_Play + four_Play + five_Play +
-            one_Show + two_Show + three_Show + four_Show + five_Show +
-            one_RA + two_RA + three_RA + four_RA + five_RA +
-            one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred,
-          data = w, family = "binomial"
+        jz <- tryCatch(
+          glm(
+            (ovpropex == 5) ~
+              one_Play + two_Play + three_Play + four_Play + five_Play +
+              one_Show + two_Show + three_Show + four_Show + five_Show +
+              one_RA + two_RA + three_RA + four_RA + five_RA +
+              one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred,
+            data = w, family = "binomial"
+          ),
+          error = function(e) NULL
         )
+        if (is.null(jz)) return(.defaults())
         EXPcol <- exp(jz$coefficients[-1])
 
         df_all <- data.frame(z2, z1)
 
-        weightedEEs_part <- data.frame(
-          df_all[df_all$Var2 == conf_label & df_all$Var1 != "(Intercept)" & df_all$Var1 != "Attend" & df_all$Var1 != "cantgeton", ][1:15, ],
-          X5 = EXPcol[1:15]
-        )
+        keep <- df_all$Var2 == conf_label & df_all$Var1 != "(Intercept)" & df_all$Var1 != "Attend" & df_all$Var1 != "cantgeton"
+        if (!any(keep)) return(.defaults())
+        core <- df_all[keep, ]
+        if (nrow(core) < 20) return(.defaults())
+
+        # Ensure we have 5 numeric columns in positions 3:7 for downstream indexing.
+        weightedEEs_part <- data.frame(core[1:15, , drop = FALSE], X5 = EXPcol[1:15])
         weightedEEs_part[weightedEEs_part$Var1 == "five_Play", 3:7] <- weightedEEs_part[weightedEEs_part$Var1 == "five_Play", 3:7] * 1
         weightedEEs_part[weightedEEs_part$Var1 == "five_Show", 3:7] <- weightedEEs_part[weightedEEs_part$Var1 == "five_Show", 3:7] * 1
 
-        cantride_part <- data.frame(df_all[df_all$Var2 == conf_label & df_all$Var1 == "cantgeton", ], X5 = rep(1, 1))
-        pref_part <- data.frame(
-          df_all[df_all$Var2 == conf_label & df_all$Var1 != "(Intercept)" & df_all$Var1 != "Attend" & df_all$Var1 != "cantgeton", ][16:20, ],
-          X5 = EXPcol[16:20]
-        )
+        can_core <- df_all[df_all$Var2 == conf_label & df_all$Var1 == "cantgeton", ]
+        if (!nrow(can_core)) return(.defaults())
+        cantride_part <- data.frame(can_core[1, , drop = FALSE], X5 = rep(1, 1))
+
+        pref_part <- data.frame(core[16:20, , drop = FALSE], X5 = EXPcol[16:20])
 
         list(weightedEEs = weightedEEs_part, cantride = cantride_part, pref = pref_part)
       }
