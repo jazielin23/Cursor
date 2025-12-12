@@ -539,10 +539,15 @@ run_simulation_dataiku <- function(
       meta_prepared2 <- sqldf::sqldf(
         "select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join QTRLY_GC b on a.name=b.name and a.Park = b.Park"
       )
-      setDT(meta_prepared2)
+      # Avoid data.table `:=` inside parallel workers (can error if object isn't a data.table).
+      # Use base merge + replacement instead.
+      meta_prepared2 <- as.data.frame(meta_prepared2)
       if (!is.null(metaPOG) && nrow(metaPOG)) {
-        setDT(metaPOG)
-        meta_prepared2[metaPOG, on = c("name", "Park"), QuarterlyGuestCarried := i.NEWGC]
+        metaPOG2 <- metaPOG[, c("name", "Park", "NEWGC")]
+        meta_prepared2 <- merge(meta_prepared2, metaPOG2, by = c("name", "Park"), all.x = TRUE)
+        idx_fill <- is.na(meta_prepared2$QuarterlyGuestCarried) & !is.na(meta_prepared2$NEWGC)
+        meta_prepared2$QuarterlyGuestCarried[idx_fill] <- meta_prepared2$NEWGC[idx_fill]
+        meta_prepared2$NEWGC <- NULL
       }
 
       metadata <- data.frame(meta_prepared2)
