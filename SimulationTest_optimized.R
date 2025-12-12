@@ -375,8 +375,8 @@ run_simulation_dataiku <- function(
 ) {
   suppressPackageStartupMessages({
     library(dataiku)
-    library(foreach)
-    library(doParallel)
+    library(future)
+    library(future.apply)
     library(data.table)
     library(dplyr)
     library(nnet)
@@ -397,27 +397,17 @@ run_simulation_dataiku <- function(
   SurveyData_new <- as.data.frame(SurveyData_new)
   names(SurveyData_new) <- tolower(names(SurveyData_new))
 
-  # Parallel setup
-  cl <- makeCluster(as.integer(num_cores))
-  doParallel::registerDoParallel(cl)
+  # future.apply setup
+  # NOTE: Dataiku runs on Linux; multisession is safest (no fork issues).
+  old_plan <- future::plan()
   on.exit({
-    try(stopCluster(cl), silent = TRUE)
+    try(future::plan(old_plan), silent = TRUE)
   }, add = TRUE)
+  options(future.globals.maxSize = max(getOption("future.globals.maxSize", 0), 8 * 1024^3))
+  future::plan(future::multisession, workers = as.integer(num_cores))
 
-  # ---- Parallel runs ----
-  EARSTotal_list <- foreach(
-    run = 1:as.integer(n_runs),
-    .combine = rbind,
-    .packages = c("dataiku", "data.table", "dplyr", "nnet", "sqldf", "reshape2"),
-    # Ensure helper functions are available on parallel workers
-    .export = c(
-      ".as_int_ov", ".base_name", ".score_vectors",
-      "apply_weights_fast", "apply_counts_fast",
-      "summarize_wide_by_group", "summarize_category_wide_by_group",
-      "as_Park_LifeStage_QTR",
-      "strip_measure_suffix"
-    )
-  ) %dopar% {
+  # ---- Parallel runs (future.apply) ----
+  run_one <- function(run) {
     # Local copies in each worker
     SurveyData <- SurveyData_new
     meta_prepared <- meta_prepared_new
@@ -1045,6 +1035,15 @@ run_simulation_dataiku <- function(
     EARSTotal$sim_run <- run
     EARSTotal
   }
+
+  run_results <- future.apply::future_lapply(
+    X = seq_len(as.integer(n_runs)),
+    FUN = run_one,
+    future.seed = TRUE,
+    future.packages = c("data.table", "dplyr", "nnet", "sqldf", "reshape2")
+  )
+
+  EARSTotal_list <- data.table::rbindlist(run_results, fill = TRUE)
 
   Simulation_Results <- EARSTotal_list
 
