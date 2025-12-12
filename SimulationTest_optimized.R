@@ -240,7 +240,8 @@ summarize_wide_by_group <- function(dt, bases, suffix, group_cols = c("park", "n
   cols <- paste0(bases, suffix)
   cols <- intersect(cols, names(dt))
   if (!length(cols)) {
-    return(dt[, c(setNames(list(NULL), character(0)))])
+    # Return grouped skeleton (no measures) to keep downstream melt logic safe.
+    return(unique(dt[, ..group_cols]))
   }
 
   dt[, lapply(.SD, sum, na.rm = TRUE), by = group_cols, .SDcols = cols]
@@ -892,41 +893,50 @@ run_simulation_dataiku <- function(
       # Build wRAA_Table + EARS (embedded from your original logic)
       # =========================
 
-      # ---- Ride long ----
-      one <- reshape2::melt(Ride_OriginalRuns20, id = c("Park", "LifeStage", "QTR"))
-      two <- reshape2::melt(Ride_OriginalAgainst20, id = c("Park", "LifeStage", "QTR"))
-      three <- reshape2::melt(Ride_Runs20, id = c("Park", "LifeStage", "QTR"))
-      four <- reshape2::melt(Ride_Against20, id = c("Park", "LifeStage", "QTR"))
+      # Robust builder: avoids fragile `[, -c(1:4)]` assumptions when measure columns are absent.
+      build_long_block <- function(orig_rs, orig_ra, w_rs, w_ra, genre) {
+        ids <- c("Park", "LifeStage", "QTR")
+        # If there are no measure columns, return empty block.
+        if (ncol(orig_rs) <= length(ids) || ncol(orig_ra) <= length(ids) || ncol(w_rs) <= length(ids) || ncol(w_ra) <= length(ids)) {
+          return(data.frame(Park = integer(0), LifeStage = integer(0), QTR = integer(0), NAME = character(0),
+                            Original_RS = numeric(0), Original_RA = numeric(0), wEE = numeric(0), wEEx = numeric(0),
+                            Genre = character(0)))
+        }
 
-      Ride <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
-      # Keep rows where at least one metric is non-zero (the old `all` filter drops most rides).
-      Ride <- unique(Ride[rowSums(Ride[, c("Original_RS", "Original_RA", "wEE", "wEEx")] != 0, na.rm = TRUE) > 0, ])
-      names(Ride) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
-      Ride$Genre <- "Ride"
+        m1 <- reshape2::melt(orig_rs, id = ids)
+        m2 <- reshape2::melt(orig_ra, id = ids)
+        m3 <- reshape2::melt(w_rs, id = ids)
+        m4 <- reshape2::melt(w_ra, id = ids)
 
-      # ---- Show long ----
-      one <- reshape2::melt(Show_OriginalRuns20, id = c("Park", "LifeStage", "QTR"))
-      two <- reshape2::melt(Show_OriginalAgainst20, id = c("Park", "LifeStage", "QTR"))
-      three <- reshape2::melt(Show_Runs20, id = c("Park", "LifeStage", "QTR"))
-      four <- reshape2::melt(Show_Against20, id = c("Park", "LifeStage", "QTR"))
+        # Standardize to: Park LifeStage QTR NAME value
+        names(m1)[names(m1) == "variable"] <- "NAME"; names(m1)[names(m1) == "value"] <- "Original_RS"
+        names(m2)[names(m2) == "variable"] <- "NAME"; names(m2)[names(m2) == "value"] <- "Original_RA"
+        names(m3)[names(m3) == "variable"] <- "NAME"; names(m3)[names(m3) == "value"] <- "wEE"
+        names(m4)[names(m4) == "variable"] <- "NAME"; names(m4)[names(m4) == "value"] <- "wEEx"
 
-      Show <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
-      Show <- Show[!is.na(Show$Park), ]
-      Show <- unique(Show[rowSums(Show[, c("Original_RS", "Original_RA", "wEE", "wEEx")] != 0, na.rm = TRUE) > 0, ])
-      names(Show) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
-      Show$Genre <- "Show"
+        key <- c(ids, "NAME")
+        out <- merge(m1, m2[, c(key, "Original_RA")], by = key, all = TRUE)
+        out <- merge(out, m3[, c(key, "wEE")], by = key, all = TRUE)
+        out <- merge(out, m4[, c(key, "wEEx")], by = key, all = TRUE)
 
-      # ---- Play long ----
-      one <- reshape2::melt(Play_OriginalRuns20, id = c("Park", "LifeStage", "QTR"))
-      two <- reshape2::melt(Play_OriginalAgainst20, id = c("Park", "LifeStage", "QTR"))
-      three <- reshape2::melt(Play_Runs20, id = c("Park", "LifeStage", "QTR"))
-      four <- reshape2::melt(Play_Against20, id = c("Park", "LifeStage", "QTR"))
+        out$Original_RS[is.na(out$Original_RS)] <- 0
+        out$Original_RA[is.na(out$Original_RA)] <- 0
+        out$wEE[is.na(out$wEE)] <- 0
+        out$wEEx[is.na(out$wEEx)] <- 0
+        out$Genre <- genre
 
-      Play <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
-      Play <- unique(Play[rowSums(Play[, c("Original_RS", "Original_RA", "wEE", "wEEx")] != 0, na.rm = TRUE) > 0, ])
-      names(Play) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
-      Play <- Play[Play$NAME != "Park.1" & Play$NAME != "LifeStage.1" & Play$NAME != "QTR.1", ]
-      Play$Genre <- "Play"
+        out <- out[rowSums(out[, c("Original_RS", "Original_RA", "wEE", "wEEx")] != 0, na.rm = TRUE) > 0, ]
+        out
+      }
+
+      Ride <- build_long_block(Ride_OriginalRuns20, Ride_OriginalAgainst20, Ride_Runs20, Ride_Against20, "Ride")
+      Show <- build_long_block(Show_OriginalRuns20, Show_OriginalAgainst20, Show_Runs20, Show_Against20, "Show")
+      Play <- build_long_block(Play_OriginalRuns20, Play_OriginalAgainst20, Play_Runs20, Play_Against20, "Play")
+
+      # Clean up Play junk names (kept from your original)
+      if (nrow(Play)) {
+        Play <- Play[Play$NAME != "Park.1" & Play$NAME != "LifeStage.1" & Play$NAME != "QTR.1", ]
+      }
 
       wRAA_Table <- rbind(Ride, Show, Play)
 
