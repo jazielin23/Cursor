@@ -245,3 +245,79 @@ summarize_wide_by_group <- function(dt, bases, suffix, group_cols = c("park", "n
 
   dt[, lapply(.SD, sum, na.rm = TRUE), by = group_cols, .SDcols = cols]
 }
+
+# Summarize Show/Play into Category1 columns (wide), by (park,newgroup,fiscal_quarter).
+# This replaces the massive per-park/per-category aggregate() loops for Show_* and Play_*.
+#
+# Returns columns:
+# - park, newgroup, fiscal_quarter, <Category1_1>, <Category1_2>, ...
+summarize_category_wide_by_group <- function(
+    dt,
+    metadata,
+    type = c("Show", "Play"),
+    suffix,
+    group_cols = c("park", "newgroup", "fiscal_quarter"),
+    # Mirrors your Show logic: exclude Anchor shows from show-category buckets
+    exclude_anchor_genre_for_show = TRUE
+) {
+  type <- match.arg(type)
+  dt <- as.data.table(dt)
+
+  m <- as.data.table(metadata)
+  if (!"Variable" %in% names(m)) stop("metadata must have column `Variable`")
+  if (!"Type" %in% names(m)) stop("metadata must have column `Type`")
+  if (!"Category1" %in% names(m)) stop("metadata must have column `Category1`")
+
+  m[, Variable := tolower(Variable)]
+  m[, Type := as.character(Type)]
+  if ("Genre" %in% names(m)) m[, Genre := as.character(Genre)]
+
+  m <- m[Type == type & !is.na(Category1) & Category1 != ""]
+  if (!nrow(m)) {
+    # Return empty-ish grouped skeleton
+    out <- unique(dt[, ..group_cols])
+    return(out)
+  }
+
+  if (type == "Show" && exclude_anchor_genre_for_show && "Genre" %in% names(m)) {
+    m <- m[is.na(Genre) | Genre != "Anchor"]
+  }
+
+  m[, base := .base_name(Variable)]
+
+  # Build mapping from base -> Category1 (dedupe).
+  map <- unique(m[, .(base, Category1)])
+
+  # Columns available in dt
+  bases <- unique(map$base)
+  cols <- intersect(paste0(bases, suffix), names(dt))
+  if (!length(cols)) {
+    out <- unique(dt[, ..group_cols])
+    return(out)
+  }
+
+  # Melt only relevant columns, map to Category1 by stripping suffix.
+  long <- melt(
+    dt[, c(group_cols, cols), with = FALSE],
+    id.vars = group_cols,
+    variable.name = "var",
+    value.name = "val",
+    variable.factor = FALSE
+  )
+  long[, base := sub(paste0(suffix, "$"), "", var)]
+  long <- long[map, on = "base", nomatch = 0L]
+
+  # Aggregate by category
+  agg <- long[, .(val = sum(val, na.rm = TRUE)), by = c(group_cols, "Category1")]
+
+  # Wide
+  dcast(agg, as.formula(paste(paste(group_cols, collapse = " + "), "~ Category1")), value.var = "val", fill = 0)
+}
+
+# Convenience wrappers to match your downstream variable names
+# (these return Park/LifeStage/QTR columns like your existing tables).
+as_Park_LifeStage_QTR <- function(dt, park_col = "park", life_col = "newgroup", qtr_col = "fiscal_quarter") {
+  dt <- as.data.table(dt)
+  setnames(dt, c(park_col, life_col, qtr_col), c("Park", "LifeStage", "QTR"), skip_absent = TRUE)
+  dt[]
+}
