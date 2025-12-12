@@ -466,18 +466,50 @@ run_simulation_dataiku <- function(
       while (k < length(meta_prepared$Variable) + 1L) {
         # Parse the metadata variable the same way as your original code, but safely.
         # (The original nested unlist/strsplit expression is easy to break with parentheses.)
-        var_k <- as.character(meta_prepared$Variable[k])
-        tmp1 <- strsplit(var_k, "charexp_", fixed = TRUE)[[1]][1]
+        var_k_raw <- as.character(meta_prepared$Variable[k])
+        if (is.na(var_k_raw) || !nzchar(var_k_raw)) {
+          k <- k + 1L
+          next
+        }
+
+        tmp1 <- strsplit(var_k_raw, "charexp_", fixed = TRUE)[[1]][1]
         tmp1 <- strsplit(tmp1, "entexp_", fixed = TRUE)[[1]][1]
         tmp1 <- strsplit(tmp1, "ridesexp_", fixed = TRUE)[[1]][1]
+        if (is.na(tmp1) || !nzchar(tmp1)) {
+          k <- k + 1L
+          next
+        }
+
         eddie <- sub(".*_", "", tmp1)
         pahk <- gsub("_.*", "", tmp1)
-        if (pahk == "dak") pahk <- 4
-        if (pahk == "mk") pahk <- 1
-        if (pahk == "ec") pahk <- 2
-        if (pahk == "dhs") pahk <- 3
 
-        expd1 <- sum(SurveyData[, meta_prepared$Variable[k]] > 0, na.rm = TRUE) / nrow(SurveyData[SurveyData$park == pahk, ])
+        # Map park token -> numeric park id; skip unknown/NA tokens instead of crashing.
+        if (is.na(pahk) || !nzchar(pahk)) {
+          k <- k + 1L
+          next
+        }
+        park_map <- c(mk = 1L, ec = 2L, dhs = 3L, dak = 4L)
+        if (pahk %in% names(park_map)) {
+          pahk <- park_map[[pahk]]
+        } else {
+          pahk_int <- suppressWarnings(as.integer(pahk))
+          if (is.na(pahk_int) || !(pahk_int %in% 1:4)) {
+            k <- k + 1L
+            next
+          }
+          pahk <- pahk_int
+        }
+
+        # Column lookup should match lowercased SurveyData names.
+        var_col <- tolower(var_k_raw)
+        if (!var_col %in% names(SurveyData)) {
+          k <- k + 1L
+          next
+        }
+
+        denom <- sum(SurveyData$park == pahk, na.rm = TRUE)
+        expd1 <- if (denom > 0) sum(SurveyData[[var_col]] > 0, na.rm = TRUE) / denom else 0
+
         name_vec <- c(name_vec, eddie)
         park_vec <- c(park_vec, pahk)
         expd_vec <- c(expd_vec, expd1)
