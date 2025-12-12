@@ -590,6 +590,13 @@ run_simulation_dataiku <- function(
       names(SurveyData) <- tolower(names(SurveyData))
       metadata <- as.data.frame(metadata)
 
+      # Defensive column access (Dataiku schemas can vary slightly)
+      n_sr <- nrow(SurveyData)
+      park_col <- if ("park" %in% names(SurveyData)) SurveyData$park else rep(NA_integer_, n_sr)
+      ov_col <- if ("ovpropex" %in% names(SurveyData)) SurveyData$ovpropex else rep(5L, n_sr)
+      SurveyData$FY <- if ("FY" %in% names(SurveyData)) as.integer(SurveyData$FY) else as.integer(yearauto)
+      if (length(SurveyData$FY) != n_sr) SurveyData$FY <- rep(as.integer(yearauto), n_sr)
+
       # ---- Play ----
       cols_play <- metadata[metadata$Type == "Play", 2]
       five_Play <- .safe_rowSums_eq(SurveyData, cols_play, 5)
@@ -599,7 +606,7 @@ run_simulation_dataiku <- function(
       one_Play <- .safe_rowSums_eq(SurveyData, cols_play, 1)
       weights_Play <- data.frame(
         one_Play = one_Play, two_Play = two_Play, three_Play = three_Play, four_Play = four_Play, five_Play = five_Play,
-        Park = as.integer(SurveyData$park),
+        Park = as.integer(park_col),
         FY = as.integer(SurveyData$FY)
       )
 
@@ -612,7 +619,7 @@ run_simulation_dataiku <- function(
       one_Show <- .safe_rowSums_eq(SurveyData, cols_show, 1)
       weights_Show <- data.frame(
         one_Show = one_Show, two_Show = two_Show, three_Show = three_Show, four_Show = four_Show, five_Show = five_Show,
-        Park = as.integer(SurveyData$park),
+        Park = as.integer(park_col),
         FY = as.integer(SurveyData$FY)
       )
 
@@ -626,7 +633,7 @@ run_simulation_dataiku <- function(
       weights_Preferred <- data.frame(
         one_Preferred = one_Preferred, two_Preferred = two_Preferred, three_Preferred = three_Preferred,
         four_Preferred = four_Preferred, five_Preferred = five_Preferred,
-        Park = as.integer(SurveyData$park),
+        Park = as.integer(park_col),
         FY = as.integer(SurveyData$FY)
       )
 
@@ -649,23 +656,23 @@ run_simulation_dataiku <- function(
       if (length(Experience) && length(CouldntRide) && length(Experience) == length(CouldntRide)) {
         Xexp <- as.matrix(SurveyData[, Experience, drop = FALSE])
         Xcant <- as.matrix(SurveyData[, CouldntRide, drop = FALSE])
-        ov_ok <- SurveyData$ovpropex < 6
+        ov_ok <- suppressWarnings(as.integer(ov_col) < 6)
         cantgeton <- rowSums(
           (Xexp == 0) & (Xcant == 1) & matrix(ov_ok, nrow = nrow(SurveyData), ncol = ncol(Xexp)),
           na.rm = TRUE
         )
       }
       cant <- data.frame(
-        ovpropex = SurveyData$ovpropex,
+        ovpropex = ov_col,
         cantgeton = cantgeton,
-        Park = as.integer(SurveyData$park),
+        Park = as.integer(park_col),
         FY = as.integer(SurveyData$FY)
       )
 
       weights_RA <- data.frame(
-        ovpropex = SurveyData$ovpropex,
+        ovpropex = ov_col,
         one_RA = one_RA, two_RA = two_RA, three_RA = three_RA, four_RA = four_RA, five_RA = five_RA,
-        Park = as.integer(SurveyData$park),
+        Park = as.integer(park_col),
         FY = as.integer(SurveyData$FY)
       )
 
