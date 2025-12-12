@@ -334,6 +334,18 @@ as_Park_LifeStage_QTR <- function(dt, park_col = "park", life_col = "newgroup", 
   dt[]
 }
 
+# Strip a trailing suffix (e.g. "2"/"3") from all measure columns.
+# This is important for Ride outputs: EARS taxonomy typically uses the base ride NAME
+# (e.g. "safaris"), not "safaris2"/"safaris3".
+strip_measure_suffix <- function(dt, suffix, id_cols = c("Park", "LifeStage", "QTR")) {
+  dt <- as.data.table(dt)
+  meas <- setdiff(names(dt), id_cols)
+  if (!length(meas)) return(dt)
+  new_names <- sub(paste0(suffix, "$"), "", meas)
+  data.table::setnames(dt, meas, new_names)
+  dt
+}
+
 # ======================================================================================
 # Dataiku-ready runner
 # ======================================================================================
@@ -871,6 +883,12 @@ run_simulation_dataiku <- function(
       Ride_Against20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(SurveyData22, ride_bases, "3"))
       Ride_OriginalRuns20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(CountData22, ride_bases, "2"))
       Ride_OriginalAgainst20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(CountData22, ride_bases, "3"))
+
+      # Strip the suffix so Ride NAMEs match EARS taxonomy keys.
+      Ride_Runs20 <- strip_measure_suffix(Ride_Runs20, "2")
+      Ride_Against20 <- strip_measure_suffix(Ride_Against20, "3")
+      Ride_OriginalRuns20 <- strip_measure_suffix(Ride_OriginalRuns20, "2")
+      Ride_OriginalAgainst20 <- strip_measure_suffix(Ride_OriginalAgainst20, "3")
 
       Show_Runs20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Show", suffix = "2"))
       Show_Against20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Show", suffix = "3"))
