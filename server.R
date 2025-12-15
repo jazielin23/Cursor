@@ -2316,6 +2316,19 @@ observeEvent(input$selected_exps, {
   selected_exps_rv(input$selected_exps)
 })
 
+# Support BOTH selection UIs:
+# - selectize input: input$selected_exps (preferred)
+# - checkbox grid:  input$exp_<name> (fallback)
+selected_exps <- reactive({
+  exps <- selected_exps_rv()
+  if (!is.null(exps) && length(exps) > 0) return(exps)
+
+  exps_cb <- get_selected_exps(input, exp_data)
+  if (!is.null(exps_cb) && length(exps_cb) > 0) return(exps_cb)
+
+  character(0)
+})
+
 observe({
   req(selected_exps_rv())
   lapply(selected_exps_rv(), function(exp_name) {
@@ -2361,9 +2374,9 @@ simulation_results <- eventReactive(input$simulate, {
   ))
   n_runs <- as.numeric(input$n_runs)
   num_cores <- 5
- exp_name <- selected_exps_rv()
-req(length(exp_name) > 0)
-exp_date_ranges <- get_exp_date_ranges(input, exp_name)
+  exp_name <- selected_exps()
+  req(length(exp_name) > 0)
+  exp_date_ranges <- get_exp_date_ranges(input, exp_name)
   park <- as.numeric(input$selected_park)
     
       # Log the inputs
@@ -2382,25 +2395,6 @@ exp_date_ranges <- get_exp_date_ranges(input, exp_name)
   )
   removeModal()
   result
-})
-    
-    
-    simulation_results <- eventReactive(input$simulate, {
-          showModal(modalDialog(
-    title = "Simulation in Progress",
-    "Please wait while the simulation runs. This may take several minutes.",
-    footer = NULL,
-    easyClose = FALSE
-  ))
- result<- run_simulation(
-    park = as.numeric(input$selected_park),
-    exp_name = selected_exps_rv(),
-    exp_date_ranges = get_exp_date_ranges(input, selected_exps_rv()),
-    n_runs = as.numeric(input$n_runs),
-    num_cores = 5
-  ) 
-        removeModal()
-result
 })
     
 
@@ -2469,9 +2463,9 @@ result
   })
 
   sim_result <- eventReactive(input$simulate, {
-    selected_exps <- get_selected_exps(input, exp_data)
-    req(selected_exps)
-    sapply(selected_exps, function(exp_name) {
+    exps <- selected_exps()
+    req(exps)
+    sapply(exps, function(exp_name) {
       dr <- input[[paste0("daterange_", exp_name)]]
       exp_label <- exp_data$Repository.Offering.Name[exp_data$name == exp_name]
       paste0(exp_label, " (", exp_name, "): ", paste(dr, collapse = " to "))
