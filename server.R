@@ -102,19 +102,10 @@ for (name in exp_name) {
         SurveyData$visdate_parsed <= as.Date(date_range[2])
       )
       seg_data <- SurveyData[seg_idx, ]
-      other_exp_cols <- setdiff(all_exp_cols, exp_ride_col)
       if (group_exists) {
         for (wanted in c(1, 0)) {
           to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
-          pool_idx <- which(
-            is.na(seg_data[[exp_ride_col]]) &
-            seg_data[[exp_group_col]] == wanted &
-            rowSums(!is.na(seg_data[, other_exp_cols, drop = FALSE])) == 0
-          )
-          # Set exp to -1 if wanted == 1
-          if (wanted == 1 && length(to_replace_idx) > 0) {
-            SurveyData[seg_idx[to_replace_idx], exp_ride_col] <- -1
-          }
+          pool_idx <- which(is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
           if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
             sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
             SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
@@ -122,10 +113,7 @@ for (name in exp_name) {
         }
       } else {
         to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]))
-        pool_idx <- which(
-          is.na(seg_data[[exp_ride_col]]) &
-          rowSums(!is.na(seg_data[, other_exp_cols, drop = FALSE])) == 0
-        )
+        pool_idx <- which(is.na(seg_data[[exp_ride_col]]))
         if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
           sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
           SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
