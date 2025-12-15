@@ -306,10 +306,31 @@ run_simulation_dataiku <- function(
   }, add = TRUE)
   registerDoParallel(cl)
 
+  # Ensure worker processes can see helper functions defined in this file.
+  # Without this, %dopar% tasks can fail with "could not find function ...".
+  helper_exports <- c(
+    ".as_int_ov",
+    ".base_name",
+    ".normalize_ears_join_keys",
+    "rename_ride_measures_to_taxonomy",
+    ".score_vectors",
+    "apply_weights_fast",
+    "apply_counts_fast",
+    "summarize_wide_by_group",
+    "summarize_category_wide_by_group",
+    "as_Park_LifeStage_QTR",
+    "strip_measure_suffix"
+  )
+
+  # Best-effort explicit export (in addition to foreach's .export).
+  # This makes behavior consistent across Dataiku / RStudio / CLI.
+  try(parallel::clusterExport(cl, varlist = helper_exports, envir = .GlobalEnv), silent = TRUE)
+
   EARSTotal_list <- foreach(
     run = 1:as.integer(n_runs),
     .combine = rbind,
-    .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2")
+    .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2"),
+    .export = helper_exports
   ) %dopar% {
     SurveyData <- SurveyData_new
     SurveyData <- as.data.frame(SurveyData)
