@@ -968,11 +968,25 @@ run_simulation_dataiku <- function(
       
 library(dplyr)
 library(sqldf)
-twox<-wRAA_Table %>% group_by(NAME, Park, Genre, QTR, LifeStage) %>% mutate(Original_RS=sum(Original_RS), Original_RA=sum(Original_RA),wEE=sum(wEE), wEEx = sum(wEEx)) %>% distinct(.keep_all = FALSE)
+twox <- wRAA_Table %>%
+  group_by(NAME, Park, Genre, QTR, LifeStage) %>%
+  summarise(
+    Original_RS = sum(Original_RS),
+    Original_RA = sum(Original_RA),
+    wEE = sum(wEE),
+    wEEx = sum(wEEx),
+    .groups = "drop"
+  )
 
-onex<-twox %>% group_by(NAME,Park, QTR) %>% mutate(sum = sum(Original_RS+Original_RA) )
-onex$Percent<- (onex$Original_RS+onex$Original_RA)/onex$sum
-wRAA_Table<- sqldf('select a.*,b.Percent from twox a left join onex b on a.Park = b.Park and a.QTR=b.QTR and a.LifeStage = b.LifeStage and a.Name = b.Name')
+# Percent share within the same Park/QTR/LifeStage across all NAMEs
+wRAA_Table <- twox %>%
+  group_by(Park, QTR, LifeStage) %>%
+  mutate(
+    sum = sum(Original_RS + Original_RA),
+    Percent = (Original_RS + Original_RA) / sum
+  ) %>%
+  ungroup() %>%
+  select(-sum)
 
 
 wRAA_Table<-wRAA_Table[!is.na(wRAA_Table$Park), ]
