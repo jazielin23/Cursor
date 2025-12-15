@@ -789,11 +789,34 @@ run_simulation_dataiku <- function(
       FQ <- FQ + 1L
     }
 
-    EARS$Actual_EARS <- EARS$EARS
-    result <- full_join(EARSTotal, EARS[, c("NAME", "Park", "Genre", "QTR", "LifeStage", "Actual_EARS")],
-                        by = c("NAME", "Park", "Genre", "QTR", "LifeStage"))
-    result$EARS[is.na(result$EARS)] <- 0
-    colnames(result)[colnames(result) == "EARS"] <- "Simulation_EARS"
+    # Robust to schema drift: ensure Actual_EARS exists and compute Incremental safely.
+    if ("EARS" %in% names(EARS)) {
+      EARS$Actual_EARS <- EARS$EARS
+    } else if ("ears" %in% names(EARS)) {
+      EARS$Actual_EARS <- EARS$ears
+    } else {
+      EARS$Actual_EARS <- 0
+    }
+
+    result <- full_join(
+      EARSTotal,
+      EARS[, c("NAME", "Park", "Genre", "QTR", "LifeStage", "Actual_EARS")],
+      by = c("NAME", "Park", "Genre", "QTR", "LifeStage")
+    )
+
+    # Some joins/environments can yield EARS.x instead of EARS; handle both.
+    if ("EARS" %in% names(result)) {
+      result$Simulation_EARS <- result$EARS
+    } else if ("EARS.x" %in% names(result)) {
+      result$Simulation_EARS <- result$EARS.x
+    } else {
+      result$Simulation_EARS <- 0
+    }
+    result$Simulation_EARS[is.na(result$Simulation_EARS)] <- 0
+
+    if (!"Actual_EARS" %in% names(result)) result$Actual_EARS <- 0
+    result$Actual_EARS[is.na(result$Actual_EARS)] <- 0
+
     result$Incremental_EARS <- result$Simulation_EARS - result$Actual_EARS
     result$sim_run <- run
     result
