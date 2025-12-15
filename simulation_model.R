@@ -383,7 +383,11 @@ run_simulation_dataiku <- function(
               pool_idx <- which(is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
               if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
                 sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
-                SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+                # Defensive guard: in parallel runs, edge cases can still yield empty RHS;
+                # never assign 0-row data into non-empty row slices.
+                if (nrow(sampled_rows) > 0 && length(seg_idx[to_replace_idx]) == nrow(sampled_rows)) {
+                  SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+                }
               }
             }
           } else {
@@ -391,7 +395,9 @@ run_simulation_dataiku <- function(
             pool_idx <- which(is.na(seg_data[[exp_ride_col]]))
             if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
               sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
-              SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+              if (nrow(sampled_rows) > 0 && length(seg_idx[to_replace_idx]) == nrow(sampled_rows)) {
+                SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+              }
             }
           }
         }
