@@ -319,6 +319,12 @@ run_simulation_dataiku <- function(
   }, add = TRUE)
   registerDoParallel(cl)
 
+  # Robust combine: parallel runs can yield slightly different columns (schema drift / join variants).
+  # Using a fill-combine prevents foreach from failing with "numbers of columns ... do not match".
+  rbind_fill_combine <- function(...) {
+    data.table::rbindlist(list(...), fill = TRUE)
+  }
+
   # Ensure worker processes can see helper functions defined in this file.
   # Without this, %dopar% tasks can fail with "could not find function ...".
   helper_exports <- c(
@@ -332,7 +338,8 @@ run_simulation_dataiku <- function(
     "summarize_wide_by_group",
     "summarize_category_wide_by_group",
     "as_Park_LifeStage_QTR",
-    "strip_measure_suffix"
+    "strip_measure_suffix",
+    "rbind_fill_combine"
   )
 
   # Best-effort explicit export (in addition to foreach's .export).
@@ -341,7 +348,8 @@ run_simulation_dataiku <- function(
 
   EARSTotal_list <- foreach(
     run = 1:as.integer(n_runs),
-    .combine = rbind,
+    .combine = rbind_fill_combine,
+    .multicombine = TRUE,
     .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2"),
     .export = helper_exports
   ) %dopar% {
