@@ -360,8 +360,11 @@ run_simulation_dataiku <- function(
 
     for (name in exp_name) {
       matched_row <- meta_prepared[meta_prepared$name == name & meta_prepared$Park == park, ]
-      exp_ride_col <- matched_row$Variable
-      exp_group_col <- matched_row$SPEC
+      if (!nrow(matched_row)) next
+      # Ensure scalar column names (avoid vector/0-length edge cases in parallel runs)
+      exp_ride_col <- as.character(matched_row$Variable[1])
+      exp_group_col <- as.character(matched_row$SPEC[1])
+      if (is.na(exp_ride_col) || !nzchar(exp_ride_col)) next
 
       ride_exists <- exp_ride_col %in% colnames(SurveyData)
       group_exists <- exp_group_col %in% colnames(SurveyData)
@@ -376,17 +379,22 @@ run_simulation_dataiku <- function(
               SurveyData$visdate_parsed >= as.Date(date_range[1]) &
               SurveyData$visdate_parsed <= as.Date(date_range[2])
           )
-          seg_data <- SurveyData[seg_idx, ]
+          if (!length(seg_idx)) next
+          seg_data <- SurveyData[seg_idx, , drop = FALSE]
           if (group_exists) {
             for (wanted in c(1, 0)) {
               to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
               pool_idx <- which(is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
               if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
-                sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
-                # Defensive guard: in parallel runs, edge cases can still yield empty RHS;
-                # never assign 0-row data into non-empty row slices.
-                if (nrow(sampled_rows) > 0 && length(seg_idx[to_replace_idx]) == nrow(sampled_rows)) {
-                  SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+                sampled_local_idx <- sample(pool_idx, size = length(to_replace_idx), replace = TRUE)
+                if (length(sampled_local_idx) == length(to_replace_idx) && length(to_replace_idx) == length(seg_idx[to_replace_idx])) {
+                  sampled_rows <- seg_data[sampled_local_idx, , drop = FALSE]
+                  # Defensive: never let a bad/mismatched assignment crash the whole run
+                  try({
+                    if (nrow(sampled_rows) == length(to_replace_idx)) {
+                      SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+                    }
+                  }, silent = TRUE)
                 }
               }
             }
@@ -394,9 +402,14 @@ run_simulation_dataiku <- function(
             to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]))
             pool_idx <- which(is.na(seg_data[[exp_ride_col]]))
             if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
-              sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
-              if (nrow(sampled_rows) > 0 && length(seg_idx[to_replace_idx]) == nrow(sampled_rows)) {
-                SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+              sampled_local_idx <- sample(pool_idx, size = length(to_replace_idx), replace = TRUE)
+              if (length(sampled_local_idx) == length(to_replace_idx) && length(to_replace_idx) == length(seg_idx[to_replace_idx])) {
+                sampled_rows <- seg_data[sampled_local_idx, , drop = FALSE]
+                try({
+                  if (nrow(sampled_rows) == length(to_replace_idx)) {
+                    SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+                  }
+                }, silent = TRUE)
               }
             }
           }
