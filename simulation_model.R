@@ -26,9 +26,19 @@ suppressPackageStartupMessages({
   sub("^[^_]+_[^_]+_", "", tolower(col))
 }
 
+.normalize_name_key <- function(x) {
+  # Normalize keys used for NAME joins (helps avoid NA due to stray whitespace).
+  x <- as.character(x)
+  x <- trimws(x)
+  # Collapse multiple whitespace (including non-breaking spaces) to single spaces
+  x <- gsub("[\u00A0\t\r\n]+", " ", x, perl = TRUE)
+  x <- gsub("\\s+", " ", x, perl = TRUE)
+  tolower(x)
+}
+
 .normalize_ears_join_keys <- function(df) {
   df <- as.data.frame(df)
-  if ("NAME" %in% names(df)) df$NAME <- tolower(as.character(df$NAME))
+  if ("NAME" %in% names(df)) df$NAME <- .normalize_name_key(df$NAME)
   if ("Genre" %in% names(df)) df$Genre <- as.character(df$Genre)
   if ("Park" %in% names(df)) df$Park <- suppressWarnings(as.integer(df$Park))
   if ("QTR" %in% names(df)) df$QTR <- suppressWarnings(as.integer(df$QTR))
@@ -249,6 +259,8 @@ summarize_category_wide_by_group <- function(dt, metadata, type = c("Show", "Pla
   }
 
   m[, base := .base_name(Variable)]
+  # Normalize Category1 so downstream NAME keys match EARS consistently
+  m[, Category1 := .normalize_name_key(Category1)]
   map <- m[!is.na(Park) & Park %in% 1:4, .(park = Park, base, Category1)]
   map <- map[!is.na(base) & nzchar(base) & !is.na(Category1) & nzchar(Category1)]
   map <- map[, .SD[1], by = .(park, base)]
