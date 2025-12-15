@@ -345,86 +345,81 @@ run_simulation_dataiku <- function(
     .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2"),
     .export = helper_exports
   ) %dopar% {
-    SurveyData <- SurveyData_new
-    SurveyData <- as.data.frame(SurveyData)
-    names(SurveyData) <- tolower(names(SurveyData))
+    stage <- "init"
+    tryCatch({
+      SurveyData <- SurveyData_new
+      SurveyData <- as.data.frame(SurveyData)
+      names(SurveyData) <- tolower(names(SurveyData))
 
-    SurveyData$newgroup <- SurveyData$newgroup1
-    SurveyData$newgroup[SurveyData$newgroup == 4] <- 3
-    SurveyData$newgroup[SurveyData$newgroup == 5] <- 4
-    SurveyData$newgroup[SurveyData$newgroup == 6] <- 5
-    SurveyData$newgroup[SurveyData$newgroup == 7] <- 5
+      stage <- "newgroup_recode"
+      SurveyData$newgroup <- SurveyData$newgroup1
+      SurveyData$newgroup[SurveyData$newgroup == 4] <- 3
+      SurveyData$newgroup[SurveyData$newgroup == 5] <- 4
+      SurveyData$newgroup[SurveyData$newgroup == 6] <- 5
+      SurveyData$newgroup[SurveyData$newgroup == 7] <- 5
 
-    meta_prepared <- meta_prepared_new
-    park <- as.integer(park_for_sim)
+      stage <- "mc_swap"
+      meta_prepared <- meta_prepared_new
+      park <- as.integer(park_for_sim)
 
-    for (name in exp_name) {
-      matched_row <- meta_prepared[meta_prepared$name == name & meta_prepared$Park == park, ]
-      if (!nrow(matched_row)) next
-      # Ensure scalar column names (avoid vector/0-length edge cases in parallel runs)
-      exp_ride_col <- as.character(matched_row$Variable[1])
-      exp_group_col <- as.character(matched_row$SPEC[1])
-      if (is.na(exp_ride_col) || !nzchar(exp_ride_col)) next
+      for (name in exp_name) {
+        matched_row <- meta_prepared[meta_prepared$name == name & meta_prepared$Park == park, ]
+        if (!nrow(matched_row)) next
+        exp_ride_col <- as.character(matched_row$Variable[1])
+        exp_group_col <- as.character(matched_row$SPEC[1])
+        if (is.na(exp_ride_col) || !nzchar(exp_ride_col)) next
 
-      ride_exists <- exp_ride_col %in% colnames(SurveyData)
-      group_exists <- exp_group_col %in% colnames(SurveyData)
+        ride_exists <- exp_ride_col %in% colnames(SurveyData)
+        group_exists <- exp_group_col %in% colnames(SurveyData)
 
-      if (ride_exists) {
-        segments <- unique(SurveyData$newgroup[SurveyData$park == park])
-        date_range <- exp_date_ranges[[name]]
-        for (seg in segments) {
-          seg_idx <- which(
-            SurveyData$park == park &
-              SurveyData$newgroup == seg &
-              SurveyData$visdate_parsed >= as.Date(date_range[1]) &
-              SurveyData$visdate_parsed <= as.Date(date_range[2])
-          )
-          if (!length(seg_idx)) next
-          seg_data <- SurveyData[seg_idx, , drop = FALSE]
-          if (group_exists) {
-            for (wanted in c(1, 0)) {
-              to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
-              pool_idx <- which(is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
-              if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
-                sampled_local_idx <- sample(pool_idx, size = length(to_replace_idx), replace = TRUE)
-                if (length(sampled_local_idx) == length(to_replace_idx) && length(to_replace_idx) == length(seg_idx[to_replace_idx])) {
-                  # Replace directly from SurveyData to guarantee column alignment
+        if (ride_exists) {
+          segments <- unique(SurveyData$newgroup[SurveyData$park == park])
+          date_range <- exp_date_ranges[[name]]
+          for (seg in segments) {
+            seg_idx <- which(
+              SurveyData$park == park &
+                SurveyData$newgroup == seg &
+                SurveyData$visdate_parsed >= as.Date(date_range[1]) &
+                SurveyData$visdate_parsed <= as.Date(date_range[2])
+            )
+            if (!length(seg_idx)) next
+            seg_data <- SurveyData[seg_idx, , drop = FALSE]
+
+            if (group_exists) {
+              for (wanted in c(1, 0)) {
+                to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
+                pool_idx <- which(is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
+                if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
+                  sampled_local_idx <- sample(pool_idx, size = length(to_replace_idx), replace = TRUE)
                   replace_rows <- seg_idx[to_replace_idx]
                   pool_rows <- seg_idx[sampled_local_idx]
                   if (length(replace_rows) == length(pool_rows) && length(replace_rows) > 0) {
-                    # Defensive: never let a bad/mismatched assignment crash the whole run
-                    try({
-                      SurveyData[replace_rows, ] <- SurveyData[pool_rows, , drop = FALSE]
-                    }, silent = TRUE)
+                    SurveyData[replace_rows, ] <- SurveyData[pool_rows, , drop = FALSE]
                   }
                 }
               }
-            }
-          } else {
-            to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]))
-            pool_idx <- which(is.na(seg_data[[exp_ride_col]]))
-            if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
-              sampled_local_idx <- sample(pool_idx, size = length(to_replace_idx), replace = TRUE)
-              if (length(sampled_local_idx) == length(to_replace_idx) && length(to_replace_idx) == length(seg_idx[to_replace_idx])) {
+            } else {
+              to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]))
+              pool_idx <- which(is.na(seg_data[[exp_ride_col]]))
+              if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
+                sampled_local_idx <- sample(pool_idx, size = length(to_replace_idx), replace = TRUE)
                 replace_rows <- seg_idx[to_replace_idx]
                 pool_rows <- seg_idx[sampled_local_idx]
                 if (length(replace_rows) == length(pool_rows) && length(replace_rows) > 0) {
-                  try({
-                    SurveyData[replace_rows, ] <- SurveyData[pool_rows, , drop = FALSE]
-                  }, silent = TRUE)
+                  SurveyData[replace_rows, ] <- SurveyData[pool_rows, , drop = FALSE]
                 }
               }
             }
           }
         }
       }
-    }
 
-    SurveyDataSim <- SurveyData
-    EARSTotal <- NULL
+      SurveyDataSim <- SurveyData
+      EARSTotal <- NULL
 
-    FQ <- 1L
-    while (FQ < as.integer(maxFQ) + 1L) {
+      stage <- "quarter_loop"
+      FQ <- 1L
+      while (FQ < as.integer(maxFQ) + 1L) {
       SurveyData <- SurveyDataSim
       SurveyData <- SurveyData[SurveyData$fiscal_quarter == FQ, ]
       if (!nrow(SurveyData)) {
@@ -484,6 +479,7 @@ run_simulation_dataiku <- function(
       meta_prepared2 <- sqldf("select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join QTRLY_GC b on a.name=b.name and a.Park = b.Park")
       meta_prepared2 <- as.data.frame(meta_prepared2)
 
+      stage <- "pog_backfill"
       if (!is.null(metaPOG) && nrow(metaPOG)) {
         meta_prepared2 <- merge(meta_prepared2, metaPOG[, c("name", "Park", "NEWGC")], by = c("name", "Park"), all.x = TRUE)
         # Defensive: Dataiku schemas/merges can drop/rename columns; only backfill when both exist.
@@ -496,6 +492,7 @@ run_simulation_dataiku <- function(
         }
       }
 
+      stage <- "weights_and_ears"
       metadata <- data.frame(meta_prepared2)
       names(SurveyData) <- tolower(names(SurveyData))
       SurveyData[is.na(SurveyData)] <- 0
@@ -800,6 +797,16 @@ run_simulation_dataiku <- function(
     result$Incremental_EARS <- result$Simulation_EARS - result$Actual_EARS
     result$sim_run <- run
     result
+    }, error = function(e) {
+      # Re-throw with high-signal context so Dataiku shows *where* it failed.
+      msg <- paste0(
+        "sim_run=", run,
+        " stage=", stage,
+        " call=", paste(deparse(conditionCall(e)), collapse = " "),
+        " msg=", conditionMessage(e)
+      )
+      stop(msg, call. = FALSE)
+    })
   }
 
   EARSTotal_list
