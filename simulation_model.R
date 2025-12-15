@@ -388,13 +388,15 @@ run_simulation_dataiku <- function(
               if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
                 sampled_local_idx <- sample(pool_idx, size = length(to_replace_idx), replace = TRUE)
                 if (length(sampled_local_idx) == length(to_replace_idx) && length(to_replace_idx) == length(seg_idx[to_replace_idx])) {
-                  sampled_rows <- seg_data[sampled_local_idx, , drop = FALSE]
-                  # Defensive: never let a bad/mismatched assignment crash the whole run
-                  try({
-                    if (nrow(sampled_rows) == length(to_replace_idx)) {
-                      SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
-                    }
-                  }, silent = TRUE)
+                  # Replace directly from SurveyData to guarantee column alignment
+                  replace_rows <- seg_idx[to_replace_idx]
+                  pool_rows <- seg_idx[sampled_local_idx]
+                  if (length(replace_rows) == length(pool_rows) && length(replace_rows) > 0) {
+                    # Defensive: never let a bad/mismatched assignment crash the whole run
+                    try({
+                      SurveyData[replace_rows, ] <- SurveyData[pool_rows, , drop = FALSE]
+                    }, silent = TRUE)
+                  }
                 }
               }
             }
@@ -404,12 +406,13 @@ run_simulation_dataiku <- function(
             if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
               sampled_local_idx <- sample(pool_idx, size = length(to_replace_idx), replace = TRUE)
               if (length(sampled_local_idx) == length(to_replace_idx) && length(to_replace_idx) == length(seg_idx[to_replace_idx])) {
-                sampled_rows <- seg_data[sampled_local_idx, , drop = FALSE]
-                try({
-                  if (nrow(sampled_rows) == length(to_replace_idx)) {
-                    SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
-                  }
-                }, silent = TRUE)
+                replace_rows <- seg_idx[to_replace_idx]
+                pool_rows <- seg_idx[sampled_local_idx]
+                if (length(replace_rows) == length(pool_rows) && length(replace_rows) > 0) {
+                  try({
+                    SurveyData[replace_rows, ] <- SurveyData[pool_rows, , drop = FALSE]
+                  }, silent = TRUE)
+                }
               }
             }
           }
