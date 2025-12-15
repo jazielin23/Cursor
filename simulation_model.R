@@ -342,6 +342,7 @@ run_simulation_dataiku <- function(
   helper_exports <- c(
     ".as_int_ov",
     ".base_name",
+    ".normalize_name_key",
     ".normalize_ears_join_keys",
     "rename_ride_measures_to_taxonomy",
     ".score_vectors",
