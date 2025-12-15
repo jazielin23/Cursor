@@ -44,6 +44,52 @@ suppressPackageStartupMessages({
   sub("^[^_]+_[^_]+_", "", tolower(col))
 }
 
+# Normalize join keys to prevent NA/empty joins caused by type/case drift.
+# This is intentionally conservative: it only touches the keys used for merging to EARS.
+.normalize_ears_join_keys <- function(df) {
+  df <- as.data.frame(df)
+  if ("NAME" %in% names(df)) df$NAME <- tolower(as.character(df$NAME))
+  if ("Genre" %in% names(df)) df$Genre <- as.character(df$Genre)
+  if ("Park" %in% names(df)) df$Park <- suppressWarnings(as.integer(df$Park))
+  if ("QTR" %in% names(df)) df$QTR <- suppressWarnings(as.integer(df$QTR))
+  if ("LifeStage" %in% names(df)) df$LifeStage <- suppressWarnings(as.integer(df$LifeStage))
+  df
+}
+
+# For Ride measures, align column names to taxonomy `name` (not derived bases).
+# This prevents "valid" experiences from missing the EARS join and showing up as NA downstream.
+#
+# dt: wide summary with id_cols + ride columns named by derived base.
+# metadata: must include `Variable`, `name`, `Type`.
+rename_ride_measures_to_taxonomy <- function(dt, metadata, id_cols = c("Park", "LifeStage", "QTR")) {
+  dt <- as.data.table(dt)
+  m <- as.data.table(metadata)
+  if (!all(c("Variable", "name", "Type") %in% names(m))) return(dt)
+  m <- m[Type == "Ride" & !is.na(Variable) & nzchar(Variable) & !is.na(name) & nzchar(name)]
+  if (!nrow(m)) return(dt)
+
+  # Derived base (matches how *2/*3 columns were created), mapped to taxonomy name.
+  m[, from := .base_name(Variable)]
+  m[, to := tolower(as.character(name))]
+  map <- unique(m[, .(from, to)])
+  map <- map[!is.na(from) & nzchar(from) & !is.na(to) & nzchar(to)]
+  # De-dupe to first mapping per source to avoid collisions.
+  map <- map[, .SD[1], by = from]
+
+  # Apply renames only when safe (don't overwrite an existing column name).
+  meas <- setdiff(names(dt), id_cols)
+  from_present <- intersect(map$from, meas)
+  if (!length(from_present)) return(dt)
+
+  for (f in from_present) {
+    t <- map$to[match(f, map$from)]
+    if (is.na(t) || !nzchar(t)) next
+    if (t %in% names(dt)) next
+    data.table::setnames(dt, f, t)
+  }
+  dt
+}
+
 # Compute the output vector for one experience column.
 # - score2: runs scored (only rating==5)
 # - score3: runs against (ratings 1..4 + can't-ride == -1)
@@ -407,6 +453,8 @@ run_simulation_dataiku <- function(
   POG_new <- dkuReadDataset("Charcter_Entertainment_POG") # kept for parity (used elsewhere in your flow)
   DT <- dkuReadDataset("DT")
   EARS <- dkuReadDataset("EARS_Taxonomy")
+  # Keep joins stable across refactors: normalize EARS join keys early.
+  EARS <- .normalize_ears_join_keys(EARS)
 
   # Normalize column names once
   SurveyData_new <- as.data.frame(SurveyData_new)
@@ -897,6 +945,13 @@ run_simulation_dataiku <- function(
       Ride_OriginalRuns20 <- strip_measure_suffix(Ride_OriginalRuns20, "2")
       Ride_OriginalAgainst20 <- strip_measure_suffix(Ride_OriginalAgainst20, "3")
 
+      # Critical: rename ride measures to taxonomy-aligned `metadata$name`
+      # (prevents experiences becoming NA due to name mismatches).
+      Ride_Runs20 <- rename_ride_measures_to_taxonomy(Ride_Runs20, metadata)
+      Ride_Against20 <- rename_ride_measures_to_taxonomy(Ride_Against20, metadata)
+      Ride_OriginalRuns20 <- rename_ride_measures_to_taxonomy(Ride_OriginalRuns20, metadata)
+      Ride_OriginalAgainst20 <- rename_ride_measures_to_taxonomy(Ride_OriginalAgainst20, metadata)
+
       Show_Runs20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Show", suffix = "2"))
       Show_Against20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Show", suffix = "3"))
       Show_OriginalRuns20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(CountData22, metadata, type = "Show", suffix = "2"))
@@ -964,6 +1019,8 @@ run_simulation_dataiku <- function(
       }
 
       wRAA_Table <- rbind(Ride, Show, Play)
+      # Normalize join keys before merging to EARS (prevents NA Actual_EARS due to type/case drift).
+      wRAA_Table <- .normalize_ears_join_keys(wRAA_Table)
 
       
 library(dplyr)
@@ -993,6 +1050,7 @@ names(wRAA_Table)[length(names(wRAA_Table))]<-"wOBA_Park"
     wRAA_Table<-data.frame(wRAA_Table,wOBA_Scale = wRAA_Table$wOBA_Park/wRAA_Table$OBP)
 
         EARS <- dkuReadDataset("EARS_Taxonomy")
+        EARS <- .normalize_ears_join_keys(EARS)
 
 join_keys <- c("NAME", "Park", "Genre", "QTR", "LifeStage")
 # Remove duplicate columns from table2 except join keys
