@@ -256,13 +256,26 @@ summarize_category_wide_by_group <- function(dt, metadata, type = c("Show", "Pla
   cols <- intersect(paste0(unique(map$base), suffix), names(dt))
   if (!length(cols)) return(unique(dt[, ..group_cols]))
 
-  long <- melt(dt[, c(group_cols, cols), with = FALSE],
-               id.vars = group_cols, variable.name = "var", value.name = "val", variable.factor = FALSE)
+  # Be explicit: in Dataiku + foreach workers, `melt()` can resolve to reshape2::melt()
+  # which returns a data.frame. We need a data.table for `:=`.
+  long <- data.table::melt(
+    dt[, c(group_cols, cols), with = FALSE],
+    id.vars = group_cols,
+    variable.name = "var",
+    value.name = "val",
+    variable.factor = FALSE
+  )
+  long <- as.data.table(long)
   long[, base := sub(paste0(suffix, "$"), "", var)]
   long <- merge(long, map, by = c("park", "base"), all = FALSE)
 
   agg <- long[, .(val = sum(val, na.rm = TRUE)), by = c(group_cols, "Category1")]
-  dcast(agg, as.formula(paste(paste(group_cols, collapse = " + "), "~ Category1")), value.var = "val", fill = 0)
+  data.table::dcast(
+    agg,
+    as.formula(paste(paste(group_cols, collapse = " + "), "~ Category1")),
+    value.var = "val",
+    fill = 0
+  )
 }
 
 as_Park_LifeStage_QTR <- function(dt, park_col = "park", life_col = "newgroup", qtr_col = "fiscal_quarter") {
