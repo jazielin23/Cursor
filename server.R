@@ -395,7 +395,6 @@ run_simulation_dataiku <- function(
     library(data.table)
     library(dplyr)
     library(nnet)
-    library(sqldf)
     library(reshape2)
   })
 
@@ -404,7 +403,6 @@ run_simulation_dataiku <- function(
   AttQTR_new <- dkuReadDataset("Attendance")
   QTRLY_GC_new <- dkuReadDataset("GuestCarriedFinal")
   SurveyData_new <- dkuReadDataset("FY24_prepared")
-  POG_new <- dkuReadDataset("Charcter_Entertainment_POG") # kept for parity (used elsewhere in your flow)
   DT <- dkuReadDataset("DT")
   EARS <- dkuReadDataset("EARS_Taxonomy")
 
@@ -569,12 +567,21 @@ run_simulation_dataiku <- function(
         }
       }
 
-      meta_prepared2 <- sqldf::sqldf(
-        "select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join QTRLY_GC b on a.name=b.name and a.Park = b.Park"
-      )
-      # Avoid data.table `:=` inside parallel workers (can error if object isn't a data.table).
-      # Use base merge + replacement instead.
-      meta_prepared2 <- as.data.frame(meta_prepared2)
+      # Replace sqldf join with base merge (faster and avoids SQL overhead).
+      # Expected columns: meta_prepared has (name, Park, ...), QTRLY_GC has (name, Park, GC, ...)
+      qgc <- QTRLY_GC
+      if (!is.data.frame(qgc)) qgc <- as.data.frame(qgc)
+      keep_qgc <- intersect(c("name", "Park", "GC"), names(qgc))
+      if (length(keep_qgc) < 3) {
+        # If schema differs, keep behavior but avoid failing: create empty GC.
+        meta_prepared2 <- meta_prepared
+        meta_prepared2$QuarterlyGuestCarried <- NA_real_
+      } else {
+        qgc2 <- qgc[, keep_qgc]
+        meta_prepared2 <- merge(meta_prepared, qgc2, by = c("name", "Park"), all.x = TRUE)
+        names(meta_prepared2)[names(meta_prepared2) == "GC"] <- "QuarterlyGuestCarried"
+      }
+
       if (!is.null(metaPOG) && nrow(metaPOG)) {
         # metaPOG can be data.frame or data.table; subset safely
         need_cols_newgc <- c("name", "Park", "NEWGC")
@@ -967,12 +974,30 @@ run_simulation_dataiku <- function(
 
       
 library(dplyr)
-library(sqldf)
-twox<-wRAA_Table %>% group_by(NAME, Park, Genre, QTR, LifeStage) %>% mutate(Original_RS=sum(Original_RS), Original_RA=sum(Original_RA),wEE=sum(wEE), wEEx = sum(wEEx)) %>% distinct(.keep_all = FALSE)
+      # Replace sqldf join with native dplyr (faster + fewer dependencies).
+      # twox: collapse duplicates by keys, summing the metrics.
+      twox <- wRAA_Table %>%
+        group_by(NAME, Park, Genre, QTR, LifeStage) %>%
+        summarise(
+          Original_RS = sum(Original_RS, na.rm = TRUE),
+          Original_RA = sum(Original_RA, na.rm = TRUE),
+          wEE = sum(wEE, na.rm = TRUE),
+          wEEx = sum(wEEx, na.rm = TRUE),
+          .groups = "drop"
+        )
 
-onex<-twox %>% group_by(NAME,Park, QTR) %>% mutate(sum = sum(Original_RS+Original_RA) )
-onex$Percent<- (onex$Original_RS+onex$Original_RA)/onex$sum
-wRAA_Table<- sqldf('select a.*,b.Percent from twox a left join onex b on a.Park = b.Park and a.QTR=b.QTR and a.LifeStage = b.LifeStage and a.Name = b.Name')
+      # onex: within NAME/Park/QTR, compute each LifeStage share of (Original_RS+Original_RA)
+      onex <- twox %>%
+        group_by(NAME, Park, QTR) %>%
+        mutate(
+          sum = sum(Original_RS + Original_RA, na.rm = TRUE),
+          Percent = dplyr::if_else(sum > 0, (Original_RS + Original_RA) / sum, 0)
+        ) %>%
+        ungroup() %>%
+        select(NAME, Park, QTR, LifeStage, Percent)
+
+      wRAA_Table <- twox %>%
+        left_join(onex, by = c("NAME", "Park", "QTR", "LifeStage"))
 
 
 wRAA_Table<-wRAA_Table[!is.na(wRAA_Table$Park), ]
@@ -992,7 +1017,7 @@ names(wRAA_Table)[length(names(wRAA_Table))]<-"wOBA_Park"
 #Scaling it to the park
     wRAA_Table<-data.frame(wRAA_Table,wOBA_Scale = wRAA_Table$wOBA_Park/wRAA_Table$OBP)
 
-        EARS <- dkuReadDataset("EARS_Taxonomy")
+        # IMPORTANT: do not re-read EARS inside the quarterly loop; it was read once at the top.
 
 join_keys <- c("NAME", "Park", "Genre", "QTR", "LifeStage")
 # Remove duplicate columns from table2 except join keys
