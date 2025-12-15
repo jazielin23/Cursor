@@ -712,13 +712,44 @@ run_simulation_dataiku <- function(
 
       weights <- cbind(weights_Play, weights_Show, weights_RA, cant, weights_Preferred)
 
-      build_park_weights <- function(park_id, conf_level, conf_label) {
+      # Faster replacement for:
+      #   odds <- exp(confint(multinom_model, level=...))
+      #   z1 <- apply(odds, 3L, c); z2 <- expand.grid(...)
+      #
+      # We compute the same normal-approx CI odds ratios directly from
+      # multinom coefficients + standard errors, and then assemble the exact
+      # `weights22` structure (Var1, Var2, X1..X5) used downstream.
+      .multinom_ci_odds <- function(model, p) {
+        # p is the percentile for the CI bound (e.g., 0.998 for "99.8 %", 0.15 for "15 %")
+        z <- stats::qnorm(p)
+
+        co <- tryCatch(stats::coef(model), error = function(e) NULL)
+        se <- tryCatch(summary(model)$standard.errors, error = function(e) NULL)
+        if (is.null(co) || is.null(se)) return(NULL)
+
+        # Coerce to matrix shape: (K classes) x (P predictors)
+        if (is.vector(co)) {
+          co <- matrix(co, nrow = 1L, dimnames = list("1", names(co)))
+        }
+        if (is.vector(se)) {
+          se <- matrix(se, nrow = 1L, dimnames = dimnames(co))
+        }
+
+        # Ensure dimnames
+        if (is.null(colnames(co))) colnames(co) <- colnames(se)
+        if (is.null(rownames(co))) rownames(co) <- rownames(se)
+
+        # Compute CI bound odds ratios (including intercept); caller can drop intercept.
+        exp(co + z * se)
+      }
+
+      build_park_weights <- function(park_id, ci_p, ci_label) {
         .defaults <- function() {
           # Neutral fallback: all weights = 1.
           make_df <- function(var1) {
             data.frame(
               Var1 = var1,
-              Var2 = rep(conf_label, length(var1)),
+              Var2 = rep(ci_label, length(var1)),
               X1 = rep(1, length(var1)),
               X2 = rep(1, length(var1)),
               X3 = rep(1, length(var1)),
@@ -759,11 +790,21 @@ run_simulation_dataiku <- function(
         )
         if (is.null(test)) return(.defaults())
 
-        odds <- tryCatch(exp(confint(test, level = conf_level)), error = function(e) NULL)
-        if (is.null(odds)) return(.defaults())
-        z1 <- apply(odds, 3L, c)
-        z2 <- expand.grid(dimnames(odds)[1:2])
+        # Multinom CI odds ratios for ovpropex levels 1..4 vs baseline 5.
+        # We fill missing levels with 1s (neutral), matching prior fallbacks.
+        odds_ci <- .multinom_ci_odds(test, p = ci_p)
+        if (is.null(odds_ci)) return(.defaults())
 
+        # Drop intercept; align rows to classes 1..4 (if present).
+        odds_ci <- odds_ci[, setdiff(colnames(odds_ci), "(Intercept)"), drop = FALSE]
+        class_rows <- rownames(odds_ci)
+        # Map class labels to column positions X1..X4
+        cls_map <- suppressWarnings(as.integer(class_rows))
+        # If labels aren't numeric, keep as-is and best-effort map by order.
+        if (anyNA(cls_map)) cls_map <- seq_along(class_rows)
+        cls_map <- pmin(pmax(cls_map, 1L), 4L)
+
+        # Binomial model for X5 column (your original EXPcol)
         jz <- tryCatch(
           glm(
             (ovpropex == 5) ~
@@ -776,33 +817,66 @@ run_simulation_dataiku <- function(
           error = function(e) NULL
         )
         if (is.null(jz)) return(.defaults())
-        EXPcol <- exp(jz$coefficients[-1])
+        EXPcol <- exp(stats::coef(jz)[-1])
 
-        df_all <- data.frame(z2, z1)
+        # Helper: assemble Var1 + X1..X5 for a given ordered var list.
+        make_block <- function(var_order, x5_override = NULL) {
+          out <- data.frame(
+            Var1 = var_order,
+            Var2 = rep(ci_label, length(var_order)),
+            X1 = rep(1, length(var_order)),
+            X2 = rep(1, length(var_order)),
+            X3 = rep(1, length(var_order)),
+            X4 = rep(1, length(var_order)),
+            X5 = rep(1, length(var_order)),
+            stringsAsFactors = FALSE
+          )
 
-        keep <- df_all$Var2 == conf_label & df_all$Var1 != "(Intercept)" & df_all$Var1 != "Attend" & df_all$Var1 != "cantgeton"
-        if (!any(keep)) return(.defaults())
-        core <- df_all[keep, ]
-        if (nrow(core) < 20) return(.defaults())
+          # Fill X1..X4 from multinom CI odds ratios where available.
+          for (ii in seq_along(var_order)) {
+            v <- var_order[ii]
+            if (!v %in% colnames(odds_ci)) next
+            vals <- odds_ci[, v]
+            # Place values into X1..X4 according to the mapped class rows.
+            for (rr in seq_along(vals)) {
+              pos <- cls_map[rr]
+              out[ii, paste0("X", pos)] <- vals[rr]
+            }
+          }
 
-        # Ensure we have 5 numeric columns in positions 3:7 for downstream indexing.
-        weightedEEs_part <- data.frame(core[1:15, , drop = FALSE], X5 = EXPcol[1:15])
-        weightedEEs_part[weightedEEs_part$Var1 == "five_Play", 3:7] <- weightedEEs_part[weightedEEs_part$Var1 == "five_Play", 3:7] * 1
-        weightedEEs_part[weightedEEs_part$Var1 == "five_Show", 3:7] <- weightedEEs_part[weightedEEs_part$Var1 == "five_Show", 3:7] * 1
+          # Fill X5 from binomial odds ratios (or override with scalar/vector).
+          if (!is.null(x5_override)) {
+            out$X5 <- x5_override
+          } else {
+            out$X5 <- ifelse(var_order %in% names(EXPcol), EXPcol[var_order], 1)
+          }
 
-        can_core <- df_all[df_all$Var2 == conf_label & df_all$Var1 == "cantgeton", ]
-        if (!nrow(can_core)) return(.defaults())
-        cantride_part <- data.frame(can_core[1, , drop = FALSE], X5 = rep(1, 1))
+          out
+        }
 
-        pref_part <- data.frame(core[16:20, , drop = FALSE], X5 = EXPcol[16:20])
+        vars_main <- c(
+          "one_Play", "two_Play", "three_Play", "four_Play", "five_Play",
+          "one_Show", "two_Show", "three_Show", "four_Show", "five_Show",
+          "one_RA", "two_RA", "three_RA", "four_RA", "five_RA"
+        )
+        vars_pref <- c("one_Preferred", "two_Preferred", "three_Preferred", "four_Preferred", "five_Preferred")
+
+        weightedEEs_part <- make_block(vars_main)
+        cantride_part <- make_block("cantgeton", x5_override = 1)
+        pref_part <- make_block(vars_pref)
 
         list(weightedEEs = weightedEEs_part, cantride = cantride_part, pref = pref_part)
       }
 
-      mk <- build_park_weights(1, 0.995, "99.8 %")
-      ep <- build_park_weights(2, 0.99, "99.5 %")
-      dhs <- build_park_weights(3, 0.80, "90 %")
-      dak <- build_park_weights(4, 0.70, "15 %")
+      # Match your original CI labels exactly:
+      # - MK: level=0.995  -> 99.75% ~ "99.8 %"
+      # - EP: level=0.99   -> 99.5%  -> "99.5 %"
+      # - DHS: level=0.80  -> 90%    -> "90 %"
+      # - DAK: level=0.70  -> 15% (lower tail) -> "15 %"
+      mk <- build_park_weights(1, ci_p = 0.9975, ci_label = "99.8 %")
+      ep <- build_park_weights(2, ci_p = 0.995, ci_label = "99.5 %")
+      dhs <- build_park_weights(3, ci_p = 0.90, ci_label = "90 %")
+      dak <- build_park_weights(4, ci_p = 0.15, ci_label = "15 %")
 
       weightedEEs <- rbind(mk$weightedEEs, ep$weightedEEs, dhs$weightedEEs, dak$weightedEEs)
       cantride2 <- data.frame(FY = yearauto, rbind(mk$cantride, ep$cantride, dhs$cantride, dak$cantride))
