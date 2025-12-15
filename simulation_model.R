@@ -777,11 +777,16 @@ run_simulation_dataiku <- function(
         group_by(NAME, Park, QTR) %>%
         mutate(sum = sum(Original_RS + Original_RA))
       onex$Percent <- (onex$Original_RS + onex$Original_RA) / onex$sum
+      onex$Percent[!is.finite(onex$Percent) | is.na(onex$Percent)] <- 0
 
       wRAA_Table <- sqldf('select a.*,b.Percent from twox a left join onex b on a.Park = b.Park and a.QTR=b.QTR and a.LifeStage = b.LifeStage and a.Name = b.Name')
       wRAA_Table <- wRAA_Table[!is.na(wRAA_Table$Park), ]
 
-      wRAA_Table <- cbind(wRAA_Table, wOBA = wRAA_Table$wEE / (wRAA_Table$Original_RS + wRAA_Table$Original_RA))
+      # Robust wOBA (avoid NaN/Inf when denominator is 0)
+      denom_rsra <- (wRAA_Table$Original_RS + wRAA_Table$Original_RA)
+      wOBA <- ifelse(denom_rsra > 0, wRAA_Table$wEE / denom_rsra, 0)
+      wOBA[!is.finite(wOBA) | is.na(wOBA)] <- 0
+      wRAA_Table <- cbind(wRAA_Table, wOBA = wOBA)
 
       wRAA_Table <- merge(x = wRAA_Table, y = aggregate(wRAA_Table$Original_RS, by = list(QTR = wRAA_Table$QTR, Park = wRAA_Table$Park), FUN = sum),
                           by = c("QTR", "Park"), all.x = TRUE)
@@ -789,12 +794,18 @@ run_simulation_dataiku <- function(
       wRAA_Table <- merge(x = wRAA_Table, y = aggregate(wRAA_Table$Original_RA, by = list(QTR = wRAA_Table$QTR, Park = wRAA_Table$Park), FUN = sum),
                           by = c("QTR", "Park"), all.x = TRUE)
       names(wRAA_Table)[length(names(wRAA_Table))] <- "OBP2"
-      wRAA_Table$OBP <- wRAA_Table$OBP1 / (wRAA_Table$OBP1 + wRAA_Table$OBP2)
+      # Robust OBP (avoid NaN/Inf when denominator is 0)
+      denom_obp <- (wRAA_Table$OBP1 + wRAA_Table$OBP2)
+      wRAA_Table$OBP <- ifelse(denom_obp > 0, wRAA_Table$OBP1 / denom_obp, 0)
+      wRAA_Table$OBP[!is.finite(wRAA_Table$OBP) | is.na(wRAA_Table$OBP)] <- 0
 
       wRAA_Table <- merge(x = wRAA_Table, y = aggregate(wRAA_Table$wOBA, by = list(QTR = wRAA_Table$QTR, Park = wRAA_Table$Park), FUN = median),
                           by = c("QTR", "Park"), all.x = TRUE)
       names(wRAA_Table)[length(names(wRAA_Table))] <- "wOBA_Park"
-      wRAA_Table <- data.frame(wRAA_Table, wOBA_Scale = wRAA_Table$wOBA_Park / wRAA_Table$OBP)
+      # Robust scale (avoid Inf when OBP is 0)
+      wOBA_Scale <- ifelse(wRAA_Table$OBP > 0, wRAA_Table$wOBA_Park / wRAA_Table$OBP, 1)
+      wOBA_Scale[!is.finite(wOBA_Scale) | is.na(wOBA_Scale)] <- 1
+      wRAA_Table <- data.frame(wRAA_Table, wOBA_Scale = wOBA_Scale)
 
       join_keys <- c("NAME", "Park", "Genre", "QTR", "LifeStage")
       table2_nodup <- EARS[, setdiff(names(EARS), setdiff(names(wRAA_Table), join_keys))]
