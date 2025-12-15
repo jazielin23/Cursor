@@ -797,6 +797,8 @@ run_simulation_dataiku <- function(
 
         # Drop intercept; align rows to classes 1..4 (if present).
         odds_ci <- odds_ci[, setdiff(colnames(odds_ci), "(Intercept)"), drop = FALSE]
+        # Ensure we never emit NA/Inf weights (matches your original "no NA" behavior).
+        odds_ci[!is.finite(odds_ci)] <- 1
         class_rows <- rownames(odds_ci)
         # Map class labels to column positions X1..X4
         cls_map <- suppressWarnings(as.integer(class_rows))
@@ -818,6 +820,7 @@ run_simulation_dataiku <- function(
         )
         if (is.null(jz)) return(.defaults())
         EXPcol <- exp(stats::coef(jz)[-1])
+        EXPcol[!is.finite(EXPcol)] <- 1
 
         # Helper: assemble Var1 + X1..X5 for a given ordered var list.
         make_block <- function(var_order, x5_override = NULL) {
@@ -849,6 +852,11 @@ run_simulation_dataiku <- function(
             out$X5 <- x5_override
           } else {
             out$X5 <- ifelse(var_order %in% names(EXPcol), EXPcol[var_order], 1)
+          }
+
+          # Final clamp (defensive): guarantee no NA/Inf make it downstream.
+          for (cc in c("X1", "X2", "X3", "X4", "X5")) {
+            out[[cc]][!is.finite(out[[cc]])] <- 1
           }
 
           out
