@@ -483,9 +483,14 @@ run_simulation_dataiku <- function(
 
       if (!is.null(metaPOG) && nrow(metaPOG)) {
         meta_prepared2 <- merge(meta_prepared2, metaPOG[, c("name", "Park", "NEWGC")], by = c("name", "Park"), all.x = TRUE)
-        idx_fill <- is.na(meta_prepared2$QuarterlyGuestCarried) & !is.na(meta_prepared2$NEWGC)
-        meta_prepared2$QuarterlyGuestCarried[idx_fill] <- meta_prepared2$NEWGC[idx_fill]
-        meta_prepared2$NEWGC <- NULL
+        # Defensive: Dataiku schemas/merges can drop/rename columns; only backfill when both exist.
+        if ("QuarterlyGuestCarried" %in% names(meta_prepared2) && "NEWGC" %in% names(meta_prepared2)) {
+          idx_fill <- is.na(meta_prepared2$QuarterlyGuestCarried) & !is.na(meta_prepared2$NEWGC)
+          if (length(idx_fill) == nrow(meta_prepared2) && any(idx_fill, na.rm = TRUE)) {
+            meta_prepared2$QuarterlyGuestCarried[idx_fill] <- meta_prepared2$NEWGC[idx_fill]
+          }
+          meta_prepared2$NEWGC <- NULL
+        }
       }
 
       metadata <- data.frame(meta_prepared2)
