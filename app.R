@@ -57,8 +57,9 @@ ui <- bslib::page_fillable(
           title = "Upload & Score",
           fileInput(
             "image",
-            "Choose an image",
-            accept = c("image/png", "image/jpeg", "image/webp", "image/gif")
+            "Choose image(s)",
+            accept = c("image/png", "image/jpeg", "image/webp", "image/gif"),
+            multiple = TRUE
           ),
           selectInput(
             "model_type",
@@ -88,14 +89,8 @@ ui <- bslib::page_fillable(
             full_screen = TRUE,
             bslib::card_header("Preview"),
             bslib::card_body(
-              imageOutput("preview", height = "300px"),
-              tags$div(style = "height: 10px"),
-              bslib::card(
-                bslib::card_header("Image info"),
-                bslib::card_body(
-                  tableOutput("image_info")
-                )
-              )
+              selectInput("selected_image", "Selected image", choices = character(0)),
+              imageOutput("preview", height = "320px")
             )
           ),
           bslib::card(
@@ -109,16 +104,16 @@ ui <- bslib::page_fillable(
               ),
               tags$div(style = "height: 12px"),
               bslib::card(
-                bslib::card_header("Extracted features"),
+                bslib::card_header("Results (multi-upload)"),
                 bslib::card_body(
-                  tableOutput("features")
+                  tableOutput("multi_results")
                 )
               ),
               tags$div(style = "height: 12px"),
               bslib::card(
-                bslib::card_header("Feature importance (model)"),
+                bslib::card_header("Extracted features"),
                 bslib::card_body(
-                  tableOutput("feature_importance")
+                  tableOutput("features")
                 )
               )
             )
@@ -171,7 +166,12 @@ server <- function(input, output, session) {
         "Waiting for an upload…"
       )
     } else {
-      msg <- paste0("Selected: ", input$image$name)
+      nm <- input$image$name
+      msg <- if (length(nm) == 1) {
+        paste0("Selected: ", nm)
+      } else {
+        paste0("Selected: ", length(nm), " images")
+      }
       if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
         msg <- paste0(msg, " (Note: 'ranger' not installed; using linear model.)")
       }
@@ -182,62 +182,105 @@ server <- function(input, output, session) {
     }
   })
 
-  output$preview <- renderImage({
-    req(input$image)
-    list(src = input$image$datapath, contentType = input$image$type)
-  }, deleteFile = FALSE)
+  observeEvent(input$image, {
+    if (is.null(input$image) || !nrow(input$image)) {
+      updateSelectInput(session, "selected_image", choices = character(0), selected = character(0))
+    } else {
+      choices <- stats::setNames(input$image$datapath, input$image$name)
+      updateSelectInput(session, "selected_image", choices = choices, selected = input$image$datapath[[1]])
+    }
+  }, ignoreInit = TRUE)
 
-  output$image_info <- renderTable({
-    req(input$image)
-    validate(need(requireNamespace("magick", quietly = TRUE), "Package 'magick' is required. Install it with install.packages('magick')."))
-    info <- get_image_info(input$image$datapath)
-    # Show a compact subset
-    keep <- intersect(c("format", "width", "height", "colorspace", "matte", "filesize", "density", "file_size_bytes"), names(info))
-    info[, keep, drop = FALSE]
-  }, striped = TRUE, hover = TRUE)
+  output$preview <- renderImage({
+    req(input$image, input$selected_image)
+    # Find the selected file's content type, if available
+    idx <- match(input$selected_image, input$image$datapath)
+    ctype <- if (!is.na(idx)) input$image$type[[idx]] else NULL
+    list(src = input$selected_image, contentType = ctype)
+  }, deleteFile = FALSE)
 
   prediction <- eventReactive(input$predict, {
     req(input$image)
     validate(
       need(requireNamespace("magick", quietly = TRUE), "Package 'magick' is required. Install it with install.packages('magick').")
     )
-    # Cache by file content hash + model version
-    key <- paste0(tools::md5sum(input$image$datapath)[[1]], "::", current_model()$version)
-    if (exists(key, envir = cache$pred, inherits = FALSE)) {
-      return(get(key, envir = cache$pred, inherits = FALSE))
-    }
+    mdl <- current_model()
+    files <- input$image
 
-    res <- withProgress(message = "Scoring image…", value = 0, {
-      incProgress(0.2, detail = "Extracting features")
-      feats <- tryCatch(extract_quality_features(input$image$datapath), error = function(e) e)
-      if (inherits(feats, "error")) {
-        stop(paste0("Feature extraction failed: ", conditionMessage(feats)), call. = FALSE)
+    withProgress(message = "Scoring image(s)…", value = 0, {
+      n <- nrow(files)
+      rows <- vector("list", n)
+      for (i in seq_len(n)) {
+        incProgress(1 / n, detail = files$name[[i]])
+        fp <- files$datapath[[i]]
+        key <- paste0(tools::md5sum(fp)[[1]], "::", mdl$version)
+        if (exists(key, envir = cache$pred, inherits = FALSE)) {
+          rows[[i]] <- get(key, envir = cache$pred, inherits = FALSE)
+          next
+        }
+
+        feats <- tryCatch(extract_quality_features(fp), error = function(e) e)
+        if (inherits(feats, "error")) {
+          res_i <- list(
+            filename = files$name[[i]],
+            datapath = fp,
+            grade = NA_real_,
+            feats = NULL,
+            error = paste0("Feature extraction failed: ", conditionMessage(feats))
+          )
+          assign(key, res_i, envir = cache$pred)
+          rows[[i]] <- res_i
+          next
+        }
+
+        grade <- tryCatch(predict_quality_grade(mdl, feats), error = function(e) NA_real_)
+        res_i <- list(
+          filename = files$name[[i]],
+          datapath = fp,
+          grade = as.numeric(grade),
+          feats = feats,
+          error = NA_character_
+        )
+        assign(key, res_i, envir = cache$pred)
+        rows[[i]] <- res_i
       }
-
-      incProgress(0.6, detail = "Predicting grade")
-      mdl <- current_model()
-      grade <- predict_quality_grade(mdl, feats)
-      imp <- tryCatch(feature_importance(mdl), error = function(e) NULL)
-
-      incProgress(1, detail = "Done")
-      list(grade = grade, feats = feats, model = mdl, importance = imp)
+      rows
     })
-
-    assign(key, res, envir = cache$pred)
-    res
   }, ignoreInit = TRUE)
 
   output$grade <- renderText({
-    if (is.null(prediction())) {
+    if (is.null(prediction()) || is.null(input$selected_image)) {
       "—"
     } else {
-      sprintf("%.1f", prediction()$grade)
+      rows <- prediction()
+      one <- NULL
+      for (r in rows) if (identical(r$datapath, input$selected_image)) one <- r
+      if (is.null(one) || is.na(one$grade)) "—" else sprintf("%.1f", one$grade)
     }
   })
 
-  output$features <- renderTable({
+  output$multi_results <- renderTable({
     req(prediction())
-    f <- prediction()$feats
+    rows <- prediction()
+    data.frame(
+      filename = vapply(rows, `[[`, character(1), "filename"),
+      grade = vapply(rows, function(x) if (is.null(x$grade)) NA_real_ else as.numeric(x$grade), numeric(1)),
+      error = vapply(rows, function(x) x$error %||% NA_character_, character(1)),
+      row.names = NULL,
+      check.names = FALSE
+    )
+  }, striped = TRUE, hover = TRUE, digits = 3)
+
+  output$features <- renderTable({
+    req(prediction(), input$selected_image)
+    rows <- prediction()
+    one <- NULL
+    for (r in rows) if (identical(r$datapath, input$selected_image)) one <- r
+    req(!is.null(one))
+    if (is.null(one$feats)) {
+      return(data.frame(message = one$error %||% "No features available.", row.names = NULL))
+    }
+    f <- one$feats
     desc <- QUALITY_FEATURE_DESCRIPTIONS
     feature_html <- vapply(names(f), function(nm) {
       ttl <- desc[[nm]] %||% ""
@@ -250,27 +293,18 @@ server <- function(input, output, session) {
     )
   }, striped = TRUE, hover = TRUE, digits = 4, sanitize.text.function = function(x) x)
 
-  output$feature_importance <- renderTable({
-    req(prediction())
-    imp <- prediction()$importance
-    if (is.null(imp) || !nrow(imp)) {
-      return(data.frame(message = "Not available for this model.", row.names = NULL))
-    }
-    head(imp, 15)
-  }, striped = TRUE, hover = TRUE, digits = 4)
-
   output$download_result <- downloadHandler(
     filename = function() paste0("image_quality_result_", Sys.Date(), ".csv"),
     content = function(file) {
-      req(prediction(), input$image)
-      feats <- prediction()$feats
-      out <- data.frame(
-        filename = input$image$name,
-        grade = as.numeric(prediction()$grade),
-        t(as.data.frame(feats)),
-        row.names = NULL,
-        check.names = FALSE
-      )
+      req(prediction())
+      rows <- prediction()
+      out <- do.call(rbind, lapply(rows, function(r) {
+        if (is.null(r$feats)) {
+          data.frame(filename = r$filename, grade = as.numeric(r$grade), error = r$error %||% NA_character_, row.names = NULL, check.names = FALSE)
+        } else {
+          data.frame(filename = r$filename, grade = as.numeric(r$grade), t(as.data.frame(r$feats)), error = r$error %||% NA_character_, row.names = NULL, check.names = FALSE)
+        }
+      }))
       utils::write.csv(out, file, row.names = FALSE)
     }
   )
