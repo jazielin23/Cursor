@@ -70,6 +70,7 @@ ui <- bslib::page_fillable(
             ),
             selected = "rf"
           ),
+          uiOutput("nn_notice"),
           actionButton("predict", "Predict grade", class = "btn-primary"),
           downloadButton("download_result", "Download result (CSV)", class = "btn-outline-secondary"),
           tags$div(style = "height: 10px"),
@@ -141,6 +142,16 @@ ui <- bslib::page_fillable(
 
 server <- function(input, output, session) {
   cache <- reactiveValues(pred = new.env(parent = emptyenv()))
+
+  output$nn_notice <- renderUI({
+    if (!identical(input$model_type, "nn")) return(NULL)
+    if (tryCatch(.has_keras(), error = function(e) FALSE)) return(NULL)
+    div(
+      class = "alert alert-warning",
+      role = "alert",
+      "(Note: TensorFlow for keras is not installed yet. Install with: install.packages(c('keras','reticulate')); keras::install_keras())"
+    )
+  })
 
   current_model <- reactive({
     # If rf requested but ranger missing, fall back to lm with a friendly message
