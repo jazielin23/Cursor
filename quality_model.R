@@ -11,8 +11,6 @@
 # - Feature extraction is deterministic for a given image.
 
 QUALITY_MODEL_PATH <- "quality_model.rds"
-# TensorFlow SavedModel directory suffix for the NN option
-QUALITY_NN_MODEL_DIR <- "nn_tf"
 
 .feature_names <- c(
   "mean_luma",
@@ -72,16 +70,6 @@ QUALITY_FEATURE_DESCRIPTIONS <- list(
 
 .has_imager <- function() requireNamespace("imager", quietly = TRUE)
 .has_ranger <- function() requireNamespace("ranger", quietly = TRUE)
-.has_keras <- function() {
-  # keras in R uses reticulate; we need the *Python* tensorflow module too.
-  if (!requireNamespace("keras", quietly = TRUE)) return(FALSE)
-  # Prefer keras' own check if present
-  ok1 <- tryCatch(keras::is_keras_available(), error = function(e) NA)
-  if (isTRUE(ok1)) return(TRUE)
-  if (!requireNamespace("reticulate", quietly = TRUE)) return(FALSE)
-  ok2 <- tryCatch(reticulate::py_module_available("tensorflow"), error = function(e) FALSE)
-  isTRUE(ok2)
-}
 
 .safe_is_image <- function(path) {
   ext <- tolower(tools::file_ext(path))
@@ -363,7 +351,7 @@ extract_quality_features <- function(image_path) {
   )
 }
 
-train_fake_quality_model <- function(n = 6000, seed = 7, model_type = c("lm", "rf", "nn")) {
+train_fake_quality_model <- function(n = 6000, seed = 7, model_type = c("lm", "rf")) {
   model_type <- match.arg(model_type)
   set.seed(seed)
 
@@ -445,9 +433,6 @@ train_fake_quality_model <- function(n = 6000, seed = 7, model_type = c("lm", "r
   if (model_type == "rf" && !.has_ranger()) {
     model_type <- "lm"
   }
-  if (model_type == "nn" && !.has_keras()) {
-    model_type <- "lm"
-  }
 
   if (model_type == "rf") {
     fit <- ranger::ranger(
@@ -460,46 +445,6 @@ train_fake_quality_model <- function(n = 6000, seed = 7, model_type = c("lm", "r
     )
     version <- "fake-rf-v1"
     extra <- list()
-  } else if (model_type == "nn") {
-    # Simple dense network on engineered features (demo).
-    X <- as.matrix(df[, setdiff(names(df), "grade"), drop = FALSE])
-    yv <- as.numeric(df$grade)
-
-    x_mean <- apply(X, 2, mean)
-    x_sd <- apply(X, 2, stats::sd)
-    x_sd[x_sd == 0] <- 1
-    Xs <- scale(X, center = x_mean, scale = x_sd)
-
-    # Reproducibility (best-effort) - avoid hard dependency on R tensorflow package
-    if (requireNamespace("keras", quietly = TRUE)) {
-      try(keras::set_random_seed(as.integer(seed)), silent = TRUE)
-    }
-
-    fit <- keras::keras_model_sequential() |>
-      keras::layer_dense(units = 64, activation = "relu", input_shape = ncol(Xs)) |>
-      keras::layer_dropout(rate = 0.15) |>
-      keras::layer_dense(units = 32, activation = "relu") |>
-      keras::layer_dense(units = 1, activation = "linear")
-
-    fit |>
-      keras::compile(
-        optimizer = keras::optimizer_adam(learning_rate = 0.01),
-        loss = "mse",
-        metrics = list("mae")
-      )
-
-    fit |>
-      keras::fit(
-        x = Xs,
-        y = yv,
-        epochs = 25,
-        batch_size = 64,
-        validation_split = 0.2,
-        verbose = 0
-      )
-
-    version <- "fake-nn-v1"
-    extra <- list(x_mean = x_mean, x_sd = x_sd)
   } else {
     fit <- stats::lm(grade ~ ., data = df)
     version <- "fake-lm-v2"
@@ -514,7 +459,7 @@ train_fake_quality_model <- function(n = 6000, seed = 7, model_type = c("lm", "r
   ), extra)
 }
 
-load_or_train_quality_model <- function(path = QUALITY_MODEL_PATH, model_type = c("lm", "rf", "nn")) {
+load_or_train_quality_model <- function(path = QUALITY_MODEL_PATH, model_type = c("lm", "rf")) {
   model_type <- match.arg(model_type)
   base <- sub("\\.rds$", "", path)
   path2 <- paste0(base, "_", model_type, ".rds")
@@ -529,46 +474,7 @@ load_or_train_quality_model <- function(path = QUALITY_MODEL_PATH, model_type = 
     if (!.is_valid_model(m)) return(TRUE)
     # For lm/rf, a missing fit means the artifact is unusable.
     if (model_type %in% c("lm", "rf") && is.null(m$fit)) return(TRUE)
-    # For nn, we can reload the fit from disk; scaler must be present.
-    if (model_type == "nn" && (is.null(m$x_mean) || is.null(m$x_sd))) return(TRUE)
     !identical(as.character(m$feature_names), expected)
-  }
-
-  # Neural net is stored as: meta RDS + TensorFlow SavedModel directory.
-  if (model_type == "nn") {
-    if (!.has_keras()) {
-      stop(
-        "TensorFlow for keras is not installed. Run:\n",
-        "install.packages(c('keras','reticulate'))\n",
-        "keras::install_keras()\n",
-        call. = FALSE
-      )
-    }
-    model_dir <- paste0(base, "_", QUALITY_NN_MODEL_DIR)
-    meta_path <- path2
-
-    if (file.exists(meta_path) && dir.exists(model_dir)) {
-      m <- readRDS(meta_path)
-      if (.needs_retrain(m)) {
-        m <- train_fake_quality_model(model_type = "nn")
-      } else {
-        # Reload keras model from disk
-        m$fit <- keras::load_model_tf(model_dir)
-      }
-      return(m)
-    }
-
-    # Train and try to persist
-    m <- train_fake_quality_model(model_type = "nn")
-    # Save TF model + metadata (best-effort; if save fails, still return trained model)
-    try({
-      if (dir.exists(model_dir)) unlink(model_dir, recursive = TRUE, force = TRUE)
-      keras::save_model_tf(m$fit, model_dir)
-      m2 <- m
-      m2$fit <- NULL
-      saveRDS(m2, meta_path)
-    }, silent = TRUE)
-    return(m)
   }
 
   if (file.exists(path2)) {
@@ -603,26 +509,7 @@ predict_quality_grade <- function(model, features_named) {
   names(row) <- fns
   df <- as.data.frame(row, check.names = FALSE, stringsAsFactors = FALSE)
 
-  if (!is.null(model$model_type) && model$model_type == "nn") {
-    if (!.has_keras()) {
-      stop(
-        "TensorFlow for keras is not installed. Run:\n",
-        "install.packages(c('keras','reticulate'))\n",
-        "keras::install_keras()\n",
-        call. = FALSE
-      )
-    }
-    x_mean <- model$x_mean
-    x_sd <- model$x_sd
-    if (is.null(x_mean) || is.null(x_sd)) {
-      # Missing scaler -> best-effort no-scale
-      Xs <- as.matrix(df)
-    } else {
-      X <- as.matrix(df)
-      Xs <- scale(X, center = x_mean, scale = x_sd)
-    }
-    p <- as.numeric(keras::predict(model$fit, Xs, verbose = 0))
-  } else if (!is.null(model$model_type) && model$model_type == "rf") {
+  if (!is.null(model$model_type) && model$model_type == "rf") {
     p <- stats::predict(model$fit, data = df)$predictions
   } else {
     p <- stats::predict(model$fit, newdata = df)

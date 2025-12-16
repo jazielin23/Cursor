@@ -1,5 +1,3 @@
 quality_model.rds
 quality_model_lm.rds
 quality_model_rf.rds
-quality_model_nn.rds
-quality_model_nn_tf/
