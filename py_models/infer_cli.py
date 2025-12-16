@@ -21,7 +21,13 @@ from pathlib import Path
 
 
 def _err(message: str, hint: str | None = None, code: int = 1):
-    payload = {"ok": False, "error": message}
+    payload = {
+        "ok": False,
+        "error": message,
+        # Critical for debugging on Windows: confirm which Python is running.
+        "python_executable": sys.executable,
+        "python_version": sys.version.split()[0],
+    }
     if hint:
         payload["hint"] = hint
     print(json.dumps(payload))

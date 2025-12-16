@@ -253,6 +253,7 @@ server <- function(input, output, session) {
       args_q[length(args_q)] <- q(args_q[length(args_q)])
     }
 
+    cmd_string <- paste(c(shQuote(py, type = "cmd"), py_args_prefix, args_q), collapse = " ")
     out <- tryCatch(
       suppressWarnings(system2(py, c(py_args_prefix, args_q), stdout = TRUE, stderr = TRUE)),
       error = function(e) paste("ERROR:", conditionMessage(e))
@@ -269,6 +270,7 @@ server <- function(input, output, session) {
       if (is.null(parsed$raw)) parsed$raw <- txt
       parsed$status <- status
       parsed$python <- py
+      parsed$cmd <- cmd_string
     }
     adv_res(parsed)
   }, ignoreInit = TRUE)
@@ -299,7 +301,12 @@ server <- function(input, output, session) {
   output$adv_raw <- renderText({
     r <- adv_res()
     if (is.null(r)) return("")
-    r$raw %||% ""
+    paste0(
+      if (!is.null(r$cmd)) paste0("Command:\n", r$cmd, "\n\n") else "",
+      if (!is.null(r$python_executable)) paste0("Python executable (from CLI): ", r$python_executable, "\n") else "",
+      if (!is.null(r$python_version)) paste0("Python version (from CLI): ", r$python_version, "\n\n") else "",
+      r$raw %||% ""
+    )
   })
 
   prediction <- eventReactive(input$predict, {
