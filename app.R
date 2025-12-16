@@ -25,6 +25,7 @@ if (!file.exists(.quality_path)) {
 source(.quality_path, local = TRUE)
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
+.nn_available <- tryCatch(.has_keras(), error = function(e) FALSE)
 
 .feature_help_ui <- function() {
   # Uses descriptions from quality_model.R
@@ -65,8 +66,9 @@ ui <- bslib::page_fillable(
             "Model",
             choices = c(
               "Linear regression (fake training data)" = "lm",
-              "Random forest (fake training data; needs ranger)" = "rf",
-              "Neural net (fake training data; needs keras + tensorflow)" = "nn"
+              "Random forest (fake training data; needs ranger)" = "rf"
+              # NN option only shown if TensorFlow is actually available
+              , if (.nn_available) "Neural net (fake training data; keras + tensorflow)" = "nn"
             ),
             selected = "rf"
           ),
@@ -160,9 +162,6 @@ server <- function(input, output, session) {
       msg <- paste0("Selected: ", input$image$name)
       if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
         msg <- paste0(msg, " (Note: 'ranger' not installed; using linear model.)")
-      }
-      if (input$model_type == "nn" && !.has_keras()) {
-        msg <- paste0(msg, " (Note: TensorFlow isn't installed for keras; using linear model.)")
       }
       div(class = "alert alert-info mb-0", role = "alert", msg)
     }
