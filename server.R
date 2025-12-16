@@ -614,10 +614,33 @@ run_simulation_dataiku <- function(
       # Build weights22 + CantRideWeight22 (embedded from your original script)
       # =========================
 
-      .safe_rowSums_eq <- function(df, cols, value) {
+      # Fast per-row counts of values 1..5 across many columns.
+      # This replaces repeated rowSums(df == k) passes (5x per group).
+      .row_counts_1to5 <- function(df, cols) {
         cols <- intersect(tolower(cols), names(df))
-        if (!length(cols)) return(rep(0, nrow(df)))
-        rowSums(df[, cols, drop = FALSE] == value, na.rm = TRUE)
+        n <- nrow(df)
+        if (!length(cols) || n == 0) {
+          out <- matrix(0L, nrow = n, ncol = 5)
+          colnames(out) <- c("one", "two", "three", "four", "five")
+          return(out)
+        }
+
+        # data.matrix keeps numeric columns numeric (unlike as.matrix which can coerce to character).
+        m <- data.matrix(df[, cols, drop = FALSE])
+        v <- as.integer(m)
+        ok <- !is.na(v) & v >= 1L & v <= 5L
+        if (!any(ok)) {
+          out <- matrix(0L, nrow = n, ncol = 5)
+          colnames(out) <- c("one", "two", "three", "four", "five")
+          return(out)
+        }
+
+        row_id <- rep.int(seq_len(n), times = ncol(m))
+        idx <- row_id[ok] + n * (v[ok] - 1L) # bins: [lvl1 rows][lvl2 rows]...[lvl5 rows]
+        counts <- tabulate(idx, nbins = n * 5L)
+        out <- matrix(as.integer(counts), nrow = n, ncol = 5L)
+        colnames(out) <- c("one", "two", "three", "four", "five")
+        out
       }
 
       # Ensure lower names
@@ -633,11 +656,12 @@ run_simulation_dataiku <- function(
 
       # ---- Play ----
       cols_play <- metadata[metadata$Type == "Play", 2]
-      five_Play <- .safe_rowSums_eq(SurveyData, cols_play, 5)
-      four_Play <- .safe_rowSums_eq(SurveyData, cols_play, 4)
-      three_Play <- .safe_rowSums_eq(SurveyData, cols_play, 3)
-      two_Play <- .safe_rowSums_eq(SurveyData, cols_play, 2)
-      one_Play <- .safe_rowSums_eq(SurveyData, cols_play, 1)
+      cnt_play <- .row_counts_1to5(SurveyData, cols_play)
+      one_Play <- cnt_play[, "one"]
+      two_Play <- cnt_play[, "two"]
+      three_Play <- cnt_play[, "three"]
+      four_Play <- cnt_play[, "four"]
+      five_Play <- cnt_play[, "five"]
       weights_Play <- data.frame(
         one_Play = one_Play, two_Play = two_Play, three_Play = three_Play, four_Play = four_Play, five_Play = five_Play,
         Park = as.integer(park_col),
@@ -646,11 +670,12 @@ run_simulation_dataiku <- function(
 
       # ---- Show ----
       cols_show <- metadata[metadata$Type == "Show", 2]
-      five_Show <- .safe_rowSums_eq(SurveyData, cols_show, 5)
-      four_Show <- .safe_rowSums_eq(SurveyData, cols_show, 4)
-      three_Show <- .safe_rowSums_eq(SurveyData, cols_show, 3)
-      two_Show <- .safe_rowSums_eq(SurveyData, cols_show, 2)
-      one_Show <- .safe_rowSums_eq(SurveyData, cols_show, 1)
+      cnt_show <- .row_counts_1to5(SurveyData, cols_show)
+      one_Show <- cnt_show[, "one"]
+      two_Show <- cnt_show[, "two"]
+      three_Show <- cnt_show[, "three"]
+      four_Show <- cnt_show[, "four"]
+      five_Show <- cnt_show[, "five"]
       weights_Show <- data.frame(
         one_Show = one_Show, two_Show = two_Show, three_Show = three_Show, four_Show = four_Show, five_Show = five_Show,
         Park = as.integer(park_col),
@@ -659,11 +684,12 @@ run_simulation_dataiku <- function(
 
       # ---- Preferred (Flaship/Anchor) ----
       cols_pref <- metadata[metadata$Genre == "Flaship" | metadata$Genre == "Anchor", 2]
-      five_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 5)
-      four_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 4)
-      three_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 3)
-      two_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 2)
-      one_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 1)
+      cnt_pref <- .row_counts_1to5(SurveyData, cols_pref)
+      one_Preferred <- cnt_pref[, "one"]
+      two_Preferred <- cnt_pref[, "two"]
+      three_Preferred <- cnt_pref[, "three"]
+      four_Preferred <- cnt_pref[, "four"]
+      five_Preferred <- cnt_pref[, "five"]
       weights_Preferred <- data.frame(
         one_Preferred = one_Preferred, two_Preferred = two_Preferred, three_Preferred = three_Preferred,
         four_Preferred = four_Preferred, five_Preferred = five_Preferred,
@@ -673,11 +699,12 @@ run_simulation_dataiku <- function(
 
       # ---- Rides / Att ----
       cols_ride <- metadata[metadata$Type == "Ride", 2]
-      five_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 5)
-      four_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 4)
-      three_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 3)
-      two_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 2)
-      one_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 1)
+      cnt_ride <- .row_counts_1to5(SurveyData, cols_ride)
+      one_RA <- cnt_ride[, "one"]
+      two_RA <- cnt_ride[, "two"]
+      three_RA <- cnt_ride[, "three"]
+      four_RA <- cnt_ride[, "four"]
+      five_RA <- cnt_ride[, "five"]
 
       # ---- can't-get-on ----
       idx_cr <- which(!is.na(metadata[, 18]) & metadata[, 18] != "")
@@ -688,13 +715,12 @@ run_simulation_dataiku <- function(
 
       cantgeton <- rep(0, nrow(SurveyData))
       if (length(Experience) && length(CouldntRide) && length(Experience) == length(CouldntRide)) {
-        Xexp <- as.matrix(SurveyData[, Experience, drop = FALSE])
-        Xcant <- as.matrix(SurveyData[, CouldntRide, drop = FALSE])
-        ov_ok <- suppressWarnings(as.integer(ov_col) < 6)
-        cantgeton <- rowSums(
-          (Xexp == 0) & (Xcant == 1) & matrix(ov_ok, nrow = nrow(SurveyData), ncol = ncol(Xexp)),
-          na.rm = TRUE
-        )
+        Xexp <- data.matrix(SurveyData[, Experience, drop = FALSE])
+        Xcant <- data.matrix(SurveyData[, CouldntRide, drop = FALSE])
+        cantgeton <- rowSums((Xexp == 0) & (Xcant == 1), na.rm = TRUE)
+        # Apply the ovpropex < 6 constraint without allocating an extra matrix.
+        ov_int <- .as_int_ov(ov_col)
+        cantgeton[!is.na(ov_int) & ov_int >= 6L] <- 0L
       }
       cant <- data.frame(
         ovpropex = ov_col,
