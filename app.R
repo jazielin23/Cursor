@@ -214,6 +214,18 @@ server <- function(input, output, session) {
       return()
     }
 
+    py <- Sys.which("python")
+    py_args_prefix <- character(0)
+    if (identical(py, "")) {
+      # Windows often has the launcher as `py`
+      py <- Sys.which("py")
+      if (!identical(py, "")) py_args_prefix <- c("-3")
+    }
+    if (identical(py, "")) {
+      adv_res(list(ok = FALSE, error = "Python not found on PATH. Install Python and ensure `python` (or `py`) is available."))
+      return()
+    }
+
     task <- if (identical(input$adv_model, "clip_quality")) "clip_quality" else "imagenet_topk"
     args <- c(script, task, "--image", input$image$datapath)
     if (task == "imagenet_topk") {
@@ -229,15 +241,35 @@ server <- function(input, output, session) {
       args <- c(args, "--pos", input$clip_pos, "--neg", input$clip_neg)
     }
 
-    # Best-effort: use python on PATH.
+    # Windows quoting: system2 builds a single command line; quote values to keep spaces intact.
+    q <- function(x) as.character(shQuote(x, type = "cmd"))
+    args_q <- args
+    # Quote the script path and value args (but leaving flags alone is fine too)
+    args_q[1] <- q(args_q[1])              # script
+    if (length(args_q) >= 4) args_q[4] <- q(args_q[4])  # image path
+    if (task == "clip_quality") {
+      # --pos value is at end-3, --neg value at end
+      args_q[length(args_q) - 1] <- q(args_q[length(args_q) - 1])
+      args_q[length(args_q)] <- q(args_q[length(args_q)])
+    }
+
     out <- tryCatch(
-      system2("python", args, stdout = TRUE, stderr = TRUE),
+      suppressWarnings(system2(py, c(py_args_prefix, args_q), stdout = TRUE, stderr = TRUE)),
       error = function(e) paste("ERROR:", conditionMessage(e))
     )
     txt <- paste(out, collapse = "\n")
+    status <- attr(out, "status")
+    if (is.null(status)) status <- 0
 
-    parsed <- tryCatch(jsonlite::fromJSON(txt), error = function(e) list(ok = FALSE, error = "Failed to parse python output", raw = txt))
-    if (is.list(parsed) && is.null(parsed$raw)) parsed$raw <- txt
+    parsed <- tryCatch(
+      jsonlite::fromJSON(txt),
+      error = function(e) list(ok = FALSE, error = "Failed to parse python output (likely dependency missing).", raw = txt)
+    )
+    if (is.list(parsed)) {
+      if (is.null(parsed$raw)) parsed$raw <- txt
+      parsed$status <- status
+      parsed$python <- py
+    }
     adv_res(parsed)
   }, ignoreInit = TRUE)
 
@@ -245,7 +277,11 @@ server <- function(input, output, session) {
     r <- adv_res()
     if (is.null(r)) return(div(class = "text-muted", "No advanced model run yet."))
     if (isTRUE(r$ok)) return(div(class = "text-success", "OK"))
-    div(class = "text-danger", paste0("Error: ", r$error %||% "Unknown error"))
+    div(
+      class = "text-danger",
+      paste0("Error: ", r$error %||% "Unknown error"),
+      if (!is.null(r$status)) paste0(" (exit status ", r$status, ")") else ""
+    )
   })
 
   output$adv_table <- renderTable({
