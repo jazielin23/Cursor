@@ -1,4 +1,1 @@
-__pycache__/
-*.pyc
-model_artifact.json
 quality_model.rds

@@ -10,7 +10,8 @@ suppressPackageStartupMessages({
   library(shiny)
 })
 
-source("quality_model.R")
+# Source helper functions into the *app environment* (important for some deploy modes)
+source("quality_model.R", local = TRUE)
 
 model <- load_or_train_quality_model()
 
