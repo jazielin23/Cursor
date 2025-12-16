@@ -149,7 +149,12 @@ server <- function(input, output, session) {
     div(
       class = "alert alert-warning",
       role = "alert",
-      "(Note: TensorFlow for keras is not installed yet. Install with: install.packages(c('keras','reticulate')); keras::install_keras())"
+      tags$div(tags$strong("TensorFlow for keras is not installed yet.")),
+      tags$div("Install it by running this in R:"),
+      tags$pre(
+        class = "mb-0",
+        "install.packages(c('keras','reticulate'))\nkeras::install_keras()"
+      )
     )
   })
 
