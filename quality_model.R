@@ -21,7 +21,13 @@ QUALITY_MODEL_PATH <- "quality_model.rds"
 .read_gray_matrix <- function(image_path, max_size = 256) {
   .require_magick()
   img <- magick::image_read(image_path)
-  img <- magick::image_auto_orient(img)
+  # Some magick versions don't export image_auto_orient(); auto-orient is optional.
+  # If available (exported or internal), apply it; otherwise proceed without it.
+  ns <- asNamespace("magick")
+  auto_orient <- get0("image_auto_orient", envir = ns, inherits = FALSE)
+  if (is.function(auto_orient)) {
+    img <- auto_orient(img)
+  }
   img <- magick::image_scale(img, paste0(max_size, "x", max_size, ">"))
   img <- magick::image_convert(img, colorspace = "Gray")
 
