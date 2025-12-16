@@ -66,7 +66,8 @@ ui <- bslib::page_fillable(
             "Model",
             choices = c(
               "Linear regression (fake training data)" = "lm",
-              "Random forest (fake training data; needs ranger)" = "rf"
+              "Random forest (fake training data; needs ranger)" = "rf",
+              "Neural net (fake training data; needs keras + tensorflow)" = "nn"
             ),
             selected = "rf"
           ),
@@ -154,6 +155,8 @@ server <- function(input, output, session) {
     # If rf requested but ranger missing, fall back to lm with a friendly message
     if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
       load_or_train_quality_model(model_type = "lm")
+    } else if (input$model_type == "nn" && !(requireNamespace("keras", quietly = TRUE) && requireNamespace("tensorflow", quietly = TRUE))) {
+      load_or_train_quality_model(model_type = "lm")
     } else {
       load_or_train_quality_model(model_type = input$model_type)
     }
@@ -174,6 +177,9 @@ server <- function(input, output, session) {
       }
       if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
         msg <- paste0(msg, " (Note: 'ranger' not installed; using linear model.)")
+      }
+      if (input$model_type == "nn" && !(requireNamespace("keras", quietly = TRUE) && requireNamespace("tensorflow", quietly = TRUE))) {
+        msg <- paste0(msg, " (Note: 'keras'/'tensorflow' not installed; using linear model.)")
       }
       bslib::alert(
         color = "info",
