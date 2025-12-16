@@ -69,11 +69,6 @@ ui <- bslib::page_fillable(
             ),
             selected = "rf"
           ),
-          fileInput(
-            "model_upload",
-            "Or upload a model (.rds)",
-            accept = c(".rds")
-          ),
           actionButton("predict", "Predict grade", class = "btn-primary"),
           downloadButton("download_result", "Download result (CSV)", class = "btn-outline-secondary"),
           tags$div(style = "height: 10px"),
@@ -161,16 +156,11 @@ server <- function(input, output, session) {
   cache <- reactiveValues(pred = new.env(parent = emptyenv()))
 
   current_model <- reactive({
-    # Uploaded model takes precedence
-    if (!is.null(input$model_upload) && nzchar(input$model_upload$datapath)) {
-      load_uploaded_model(input$model_upload$datapath)
+    # If rf requested but ranger missing, fall back to lm with a friendly message
+    if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
+      load_or_train_quality_model(model_type = "lm")
     } else {
-      # If rf requested but ranger missing, fall back to lm with a friendly message
-      if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
-        load_or_train_quality_model(model_type = "lm")
-      } else {
-        load_or_train_quality_model(model_type = input$model_type)
-      }
+      load_or_train_quality_model(model_type = input$model_type)
     }
   })
 
@@ -182,7 +172,7 @@ server <- function(input, output, session) {
       )
     } else {
       msg <- paste0("Selected: ", input$image$name)
-      if (input$model_type == "rf" && is.null(input$model_upload) && !requireNamespace("ranger", quietly = TRUE)) {
+      if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
         msg <- paste0(msg, " (Note: 'ranger' not installed; using linear model.)")
       }
       bslib::alert(
@@ -212,7 +202,7 @@ server <- function(input, output, session) {
       need(requireNamespace("magick", quietly = TRUE), "Package 'magick' is required. Install it with install.packages('magick').")
     )
     # Cache by file content hash + model version
-    key <- paste0(tools::md5sum(input$image$datapath)[[1]], "::", current_model()$version %||% "uploaded")
+    key <- paste0(tools::md5sum(input$image$datapath)[[1]], "::", current_model()$version)
     if (exists(key, envir = cache$pred, inherits = FALSE)) {
       return(get(key, envir = cache$pred, inherits = FALSE))
     }

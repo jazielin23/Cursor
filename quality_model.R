@@ -412,14 +412,6 @@ load_or_train_quality_model <- function(path = QUALITY_MODEL_PATH, model_type = 
   }
 }
 
-load_uploaded_model <- function(path) {
-  m <- readRDS(path)
-  if (!is.list(m) || is.null(m$fit) || is.null(m$feature_names)) {
-    stop("Uploaded model is not a valid quality model .rds.", call. = FALSE)
-  }
-  m
-}
-
 predict_quality_grade <- function(model, features_named) {
   df <- as.data.frame(as.list(features_named[model$feature_names]))
   for (nm in names(df)) if (is.na(df[[nm]])) df[[nm]] <- 0
