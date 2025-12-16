@@ -88,10 +88,10 @@ ui <- bslib::page_fillable(
           ),
           conditionalPanel(
             condition = "input.adv_model == 'clip_quality'",
-            textInput(\"clip_pos\", \"CLIP positive prompt\", \"a high quality, sharp photo\"),
-            textInput(\"clip_neg\", \"CLIP negative prompt\", \"a low quality, blurry, noisy photo\")
+            textInput("clip_pos", "CLIP positive prompt", "a high quality, sharp photo"),
+            textInput("clip_neg", "CLIP negative prompt", "a low quality, blurry, noisy photo")
           ),
-          actionButton(\"run_adv\", \"Run advanced model\", class = \"btn-outline-primary\"),
+          actionButton("run_adv", "Run advanced model", class = "btn-outline-primary"),
           actionButton("predict", "Predict grade", class = "btn-primary"),
           downloadButton("download_result", "Download result (CSV)", class = "btn-outline-secondary"),
           tags$div(style = "height: 10px"),
