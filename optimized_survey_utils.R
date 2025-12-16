@@ -246,6 +246,13 @@ build_and_assign_all_weights <- function(SurveyData, metadata, yearauto, FQ = NU
   invisible(out)
 }
 
+# Convenience overload: if your object is named `meta_prepared2` (common in your flow),
+# this avoids needing to create a separate `metadata` object first.
+build_and_assign_all_weights_from_meta_prepared2 <- function(SurveyData, meta_prepared2, yearauto, FQ = NULL) {
+  metadata <- data.frame(meta_prepared2)
+  build_and_assign_all_weights(SurveyData, metadata, yearauto, FQ = FQ)
+}
+
 # Optional auto-run on source().
 # If you set: options(optimized_survey_utils.autorun = TRUE)
 # and the following objects exist in the global environment:
