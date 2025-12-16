@@ -164,10 +164,7 @@ server <- function(input, output, session) {
 
   output$status <- renderUI({
     if (is.null(input$image)) {
-      bslib::alert(
-        color = "secondary",
-        "Waiting for an upload…"
-      )
+      div(class = "alert alert-secondary mb-0", role = "alert", "Waiting for an upload…")
     } else {
       nm <- input$image$name
       msg <- if (length(nm) == 1) {
@@ -181,10 +178,7 @@ server <- function(input, output, session) {
       if (input$model_type == "nn" && !(requireNamespace("keras", quietly = TRUE) && requireNamespace("tensorflow", quietly = TRUE))) {
         msg <- paste0(msg, " (Note: 'keras'/'tensorflow' not installed; using linear model.)")
       }
-      bslib::alert(
-        color = "info",
-        msg
-      )
+      div(class = "alert alert-info mb-0", role = "alert", msg)
     }
   })
 
