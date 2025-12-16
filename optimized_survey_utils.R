@@ -253,6 +253,31 @@ build_and_assign_all_weights_from_meta_prepared2 <- function(SurveyData, meta_pr
   build_and_assign_all_weights(SurveyData, metadata, yearauto, FQ = FQ)
 }
 
+# Zero-arg convenience for parallel workers: looks up inputs in the caller env.
+# It will use `metadata` if present; otherwise it will build it from `meta_prepared2`.
+# Required in caller env: SurveyData, yearauto. Optional: FQ, metadata OR meta_prepared2.
+build_and_assign_all_weights_auto <- function() {
+  env <- parent.frame()
+  if (!exists("SurveyData", envir = env, inherits = FALSE)) stop("SurveyData not found in calling environment")
+  if (!exists("yearauto", envir = env, inherits = FALSE)) stop("yearauto not found in calling environment")
+
+  SurveyData <- get("SurveyData", envir = env, inherits = FALSE)
+  yearauto <- get("yearauto", envir = env, inherits = FALSE)
+  FQ <- if (exists("FQ", envir = env, inherits = FALSE)) get("FQ", envir = env, inherits = FALSE) else NULL
+
+  metadata <- NULL
+  if (exists("metadata", envir = env, inherits = FALSE)) {
+    metadata <- get("metadata", envir = env, inherits = FALSE)
+  } else if (exists("meta_prepared2", envir = env, inherits = FALSE)) {
+    metadata <- data.frame(get("meta_prepared2", envir = env, inherits = FALSE))
+    assign("metadata", metadata, envir = env)
+  } else {
+    stop("Neither metadata nor meta_prepared2 found in calling environment")
+  }
+
+  build_and_assign_all_weights(SurveyData, metadata, yearauto, FQ = FQ)
+}
+
 # Optional auto-run on source().
 # If you set: options(optimized_survey_utils.autorun = TRUE)
 # and the following objects exist in the global environment:
