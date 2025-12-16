@@ -64,12 +64,16 @@ ui <- bslib::page_fillable(
           selectInput(
             "model_type",
             "Model",
-            choices = c(
-              "Linear regression (fake training data)" = "lm",
-              "Random forest (fake training data; needs ranger)" = "rf"
-              # NN option only shown if TensorFlow is actually available
-              , if (.nn_available) "Neural net (fake training data; keras + tensorflow)" = "nn"
-            ),
+            choices = {
+              ch <- c(
+                "Linear regression (fake training data)" = "lm",
+                "Random forest (fake training data; needs ranger)" = "rf"
+              )
+              if (.nn_available) {
+                ch <- c(ch, "Neural net (fake training data; keras + tensorflow)" = "nn")
+              }
+              ch
+            },
             selected = "rf"
           ),
           actionButton("predict", "Predict grade", class = "btn-primary"),
@@ -143,6 +147,13 @@ ui <- bslib::page_fillable(
 
 server <- function(input, output, session) {
   cache <- reactiveValues(pred = new.env(parent = emptyenv()))
+
+  observeEvent(input$model_type, {
+    # If the browser is holding onto a stale "nn" selection, reset it.
+    if (identical(input$model_type, "nn") && !tryCatch(.has_keras(), error = function(e) FALSE)) {
+      updateSelectInput(session, "model_type", selected = "lm")
+    }
+  }, ignoreInit = TRUE)
 
   current_model <- reactive({
     # If rf requested but ranger missing, fall back to lm with a friendly message
