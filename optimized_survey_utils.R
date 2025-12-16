@@ -238,8 +238,22 @@ build_all_weights <- function(SurveyData, metadata, yearauto, FQ = NULL) {
 
 # Convenience: builds and assigns into the *calling* environment.
 # Use this inside parallel workers to ensure `weights22` exists in that task.
-build_and_assign_all_weights <- function(SurveyData, metadata, yearauto, FQ = NULL) {
+build_and_assign_all_weights <- function(SurveyData, metadata = NULL, yearauto, FQ = NULL, meta_prepared2 = NULL) {
+  # Allow callers to pass either `metadata` or `meta_prepared2`.
+  if (is.null(metadata)) {
+    if (!is.null(meta_prepared2)) {
+      metadata <- data.frame(meta_prepared2)
+    } else if (exists("metadata", envir = parent.frame(), inherits = TRUE)) {
+      metadata <- get("metadata", envir = parent.frame(), inherits = TRUE)
+    } else if (exists("meta_prepared2", envir = parent.frame(), inherits = TRUE)) {
+      metadata <- data.frame(get("meta_prepared2", envir = parent.frame(), inherits = TRUE))
+    } else {
+      stop("metadata not found (pass `metadata=` or `meta_prepared2=`)")
+    }
+  }
+
   out <- build_all_weights(SurveyData, metadata, yearauto, FQ = FQ)
+  assign("metadata", metadata, envir = parent.frame())
   assign("weights", out$weights, envir = parent.frame())
   assign("weights22", out$weights22, envir = parent.frame())
   assign("CantRideWeight22", out$CantRideWeight22, envir = parent.frame())
@@ -250,7 +264,7 @@ build_and_assign_all_weights <- function(SurveyData, metadata, yearauto, FQ = NU
 # this avoids needing to create a separate `metadata` object first.
 build_and_assign_all_weights_from_meta_prepared2 <- function(SurveyData, meta_prepared2, yearauto, FQ = NULL) {
   metadata <- data.frame(meta_prepared2)
-  build_and_assign_all_weights(SurveyData, metadata, yearauto, FQ = FQ)
+  build_and_assign_all_weights(SurveyData, metadata = metadata, yearauto, FQ = FQ)
 }
 
 # Zero-arg convenience for parallel workers: looks up inputs in the caller env.
@@ -258,24 +272,32 @@ build_and_assign_all_weights_from_meta_prepared2 <- function(SurveyData, meta_pr
 # Required in caller env: SurveyData, yearauto. Optional: FQ, metadata OR meta_prepared2.
 build_and_assign_all_weights_auto <- function() {
   env <- parent.frame()
-  if (!exists("SurveyData", envir = env, inherits = FALSE)) stop("SurveyData not found in calling environment")
-  if (!exists("yearauto", envir = env, inherits = FALSE)) stop("yearauto not found in calling environment")
+  if (!exists("SurveyData", envir = env, inherits = TRUE)) stop("SurveyData not found in calling environment")
+  if (!exists("yearauto", envir = env, inherits = TRUE)) stop("yearauto not found in calling environment")
 
-  SurveyData <- get("SurveyData", envir = env, inherits = FALSE)
-  yearauto <- get("yearauto", envir = env, inherits = FALSE)
-  FQ <- if (exists("FQ", envir = env, inherits = FALSE)) get("FQ", envir = env, inherits = FALSE) else NULL
+  SurveyData <- get("SurveyData", envir = env, inherits = TRUE)
+  yearauto <- get("yearauto", envir = env, inherits = TRUE)
+  FQ <- if (exists("FQ", envir = env, inherits = TRUE)) get("FQ", envir = env, inherits = TRUE) else NULL
 
   metadata <- NULL
-  if (exists("metadata", envir = env, inherits = FALSE)) {
-    metadata <- get("metadata", envir = env, inherits = FALSE)
-  } else if (exists("meta_prepared2", envir = env, inherits = FALSE)) {
-    metadata <- data.frame(get("meta_prepared2", envir = env, inherits = FALSE))
+  if (exists("metadata", envir = env, inherits = TRUE)) {
+    metadata <- get("metadata", envir = env, inherits = TRUE)
+  } else if (exists("meta_prepared2", envir = env, inherits = TRUE)) {
+    metadata <- data.frame(get("meta_prepared2", envir = env, inherits = TRUE))
     assign("metadata", metadata, envir = env)
   } else {
     stop("Neither metadata nor meta_prepared2 found in calling environment")
   }
 
-  build_and_assign_all_weights(SurveyData, metadata, yearauto, FQ = FQ)
+  build_and_assign_all_weights(SurveyData, metadata = metadata, yearauto = yearauto, FQ = FQ)
+}
+
+# Single wrapper you can drop into your loop:
+# - builds metadata from meta_prepared2
+# - builds weights, weights22, CantRideWeight22
+# - assigns them in the caller env
+multinom_weights_fast <- function(SurveyData, meta_prepared2, yearauto, FQ = NULL) {
+  build_and_assign_all_weights(SurveyData, meta_prepared2 = meta_prepared2, yearauto = yearauto, FQ = FQ)
 }
 
 # Optional auto-run on source().
