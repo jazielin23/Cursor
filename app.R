@@ -9,6 +9,9 @@
 suppressPackageStartupMessages({
   library(shiny)
 })
+if (!requireNamespace("jsonlite", quietly = TRUE)) {
+  stop("Package 'jsonlite' is required. Install it with install.packages('jsonlite').", call. = FALSE)
+}
 if (!requireNamespace("bslib", quietly = TRUE)) {
   stop("Package 'bslib' is required. Install it with install.packages('bslib').", call. = FALSE)
 }
@@ -69,6 +72,26 @@ ui <- bslib::page_fillable(
             ),
             selected = "rf"
           ),
+          tags$hr(),
+          tags$h6("Advanced models (optional)"),
+          selectInput(
+            "adv_model",
+            "Advanced model",
+            choices = c(
+              "None" = "none",
+              "EfficientNetV2-S (ImageNet labels)" = "effv2s",
+              "ViT-B/16 (ImageNet labels)" = "vit_b16",
+              "ViT-L/16 (ImageNet labels)" = "vit_l16",
+              "CLIP (zero-shot quality score)" = "clip_quality"
+            ),
+            selected = "none"
+          ),
+          conditionalPanel(
+            condition = "input.adv_model == 'clip_quality'",
+            textInput(\"clip_pos\", \"CLIP positive prompt\", \"a high quality, sharp photo\"),
+            textInput(\"clip_neg\", \"CLIP negative prompt\", \"a low quality, blurry, noisy photo\")
+          ),
+          actionButton(\"run_adv\", \"Run advanced model\", class = \"btn-outline-primary\"),
           actionButton("predict", "Predict grade", class = "btn-primary"),
           downloadButton("download_result", "Download result (CSV)", class = "btn-outline-secondary"),
           tags$div(style = "height: 10px"),
@@ -106,6 +129,15 @@ ui <- bslib::page_fillable(
                 bslib::card_body(
                   tableOutput("features")
                 )
+              ),
+              tags$div(style = "height: 12px"),
+              bslib::card(
+                bslib::card_header("Advanced model output"),
+                bslib::card_body(
+                  uiOutput("adv_status"),
+                  tableOutput("adv_table"),
+                  verbatimTextOutput("adv_raw", placeholder = TRUE)
+                )
               )
             )
           )
@@ -140,6 +172,7 @@ ui <- bslib::page_fillable(
 
 server <- function(input, output, session) {
   cache <- reactiveValues(pred = new.env(parent = emptyenv()))
+  adv_res <- reactiveVal(NULL)
 
   current_model <- reactive({
     # If rf requested but ranger missing, fall back to lm with a friendly message
@@ -166,6 +199,72 @@ server <- function(input, output, session) {
     req(input$image)
     list(src = input$image$datapath, contentType = input$image$type)
   }, deleteFile = FALSE)
+
+  observeEvent(input$run_adv, {
+    req(input$image)
+    if (identical(input$adv_model, "none")) {
+      adv_res(NULL)
+      return()
+    }
+
+    # Call optional Python CLI. If missing deps, it returns {"ok":false,...}.
+    script <- file.path(getwd(), "py_models", "infer_cli.py")
+    if (!file.exists(script)) {
+      adv_res(list(ok = FALSE, error = "Missing py_models/infer_cli.py in app folder"))
+      return()
+    }
+
+    task <- if (identical(input$adv_model, "clip_quality")) "clip_quality" else "imagenet_topk"
+    args <- c(script, task, "--image", input$image$datapath)
+    if (task == "imagenet_topk") {
+      arch <- switch(
+        input$adv_model,
+        effv2s = "efficientnet_v2_s",
+        vit_b16 = "vit_b_16",
+        vit_l16 = "vit_l_16",
+        "efficientnet_v2_s"
+      )
+      args <- c(args, "--arch", arch, "--k", "5")
+    } else {
+      args <- c(args, "--pos", input$clip_pos, "--neg", input$clip_neg)
+    }
+
+    # Best-effort: use python on PATH.
+    out <- tryCatch(
+      system2("python", args, stdout = TRUE, stderr = TRUE),
+      error = function(e) paste("ERROR:", conditionMessage(e))
+    )
+    txt <- paste(out, collapse = "\n")
+
+    parsed <- tryCatch(jsonlite::fromJSON(txt), error = function(e) list(ok = FALSE, error = "Failed to parse python output", raw = txt))
+    if (is.list(parsed) && is.null(parsed$raw)) parsed$raw <- txt
+    adv_res(parsed)
+  }, ignoreInit = TRUE)
+
+  output$adv_status <- renderUI({
+    r <- adv_res()
+    if (is.null(r)) return(div(class = "text-muted", "No advanced model run yet."))
+    if (isTRUE(r$ok)) return(div(class = "text-success", "OK"))
+    div(class = "text-danger", paste0("Error: ", r$error %||% "Unknown error"))
+  })
+
+  output$adv_table <- renderTable({
+    r <- adv_res()
+    if (is.null(r) || !isTRUE(r$ok)) return(NULL)
+    if (identical(r$task, "clip_quality")) {
+      data.frame(score_0_10 = r$score, diff = r$diff, pos = r$pos, neg = r$neg, row.names = NULL)
+    } else if (identical(r$task, "imagenet_topk")) {
+      data.frame(label = r$topk$label, prob = r$topk$prob, row.names = NULL)
+    } else {
+      NULL
+    }
+  }, striped = TRUE, hover = TRUE, digits = 4)
+
+  output$adv_raw <- renderText({
+    r <- adv_res()
+    if (is.null(r)) return("")
+    r$raw %||% ""
+  })
 
   prediction <- eventReactive(input$predict, {
     req(input$image)
