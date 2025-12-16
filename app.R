@@ -25,7 +25,6 @@ if (!file.exists(.quality_path)) {
 source(.quality_path, local = TRUE)
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
-.nn_available <- tryCatch(.has_keras(), error = function(e) FALSE)
 
 .feature_help_ui <- function() {
   # Uses descriptions from quality_model.R
@@ -64,16 +63,11 @@ ui <- bslib::page_fillable(
           selectInput(
             "model_type",
             "Model",
-            choices = {
-              ch <- c(
-                "Linear regression (fake training data)" = "lm",
-                "Random forest (fake training data; needs ranger)" = "rf"
-              )
-              if (.nn_available) {
-                ch <- c(ch, "Neural net (fake training data; keras + tensorflow)" = "nn")
-              }
-              ch
-            },
+            choices = c(
+              "Linear regression (fake training data)" = "lm",
+              "Random forest (fake training data; needs ranger)" = "rf",
+              "Neural net (fake training data; keras + tensorflow)" = "nn"
+            ),
             selected = "rf"
           ),
           actionButton("predict", "Predict grade", class = "btn-primary"),
@@ -148,18 +142,9 @@ ui <- bslib::page_fillable(
 server <- function(input, output, session) {
   cache <- reactiveValues(pred = new.env(parent = emptyenv()))
 
-  observeEvent(input$model_type, {
-    # If the browser is holding onto a stale "nn" selection, reset it.
-    if (identical(input$model_type, "nn") && !tryCatch(.has_keras(), error = function(e) FALSE)) {
-      updateSelectInput(session, "model_type", selected = "lm")
-    }
-  }, ignoreInit = TRUE)
-
   current_model <- reactive({
     # If rf requested but ranger missing, fall back to lm with a friendly message
     if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
-      load_or_train_quality_model(model_type = "lm")
-    } else if (input$model_type == "nn" && !.has_keras()) {
       load_or_train_quality_model(model_type = "lm")
     } else {
       load_or_train_quality_model(model_type = input$model_type)
@@ -173,6 +158,14 @@ server <- function(input, output, session) {
       msg <- paste0("Selected: ", input$image$name)
       if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
         msg <- paste0(msg, " (Note: 'ranger' not installed; using linear model.)")
+      }
+      if (input$model_type == "nn" && !tryCatch(.has_keras(), error = function(e) FALSE)) {
+        msg <- paste0(
+          msg,
+          " (Note: TensorFlow for keras is not installed yet. Install with: ",
+          "install.packages(c('keras','reticulate')); keras::install_keras()",
+          ")"
+        )
       }
       div(class = "alert alert-info mb-0", role = "alert", msg)
     }
