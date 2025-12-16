@@ -91,3 +91,137 @@ compute_cantgeton <- function(SurveyData, metadata, couldnt_col_idx = 18, exp_co
   ok <- matrix(SurveyData[[ov_col]] < 6, nrow = nrow(SurveyData), ncol = ncol(Xexp))
   rowSums((Xexp == 0) & (Xcant == 1) & ok, na.rm = TRUE)
 }
+
+# Build the full `weights` table inputs efficiently (Play/Show/Ride/Preferred + cantgeton).
+# This replaces the repeated `names(SurveyData)[names(SurveyData) %in% ...]` subsetting and the cantgeton loop.
+build_weights_inputs <- function(SurveyData, metadata, yearauto, FQ = NULL) {
+  if (!is.null(FQ)) SurveyData <- filter_quarter(SurveyData, FQ)
+
+  # Normalize metadata variable names once
+  meta_var <- tolower(metadata[, 2])
+  nms <- tolower(names(SurveyData))
+
+  cols_play <- intersect(nms, meta_var[metadata$Type == "Play"])
+  cols_show <- intersect(nms, meta_var[metadata$Type == "Show"])
+  cols_ride <- intersect(nms, meta_var[metadata$Type == "Ride"])
+  cols_pref <- intersect(nms, meta_var[metadata$Genre %in% c("Flaship", "Anchor")])
+
+  play <- count_ratings_1to5(SurveyData, cols_play)
+  show <- count_ratings_1to5(SurveyData, cols_show)
+  ride <- count_ratings_1to5(SurveyData, cols_ride)
+  pref <- count_ratings_1to5(SurveyData, cols_pref)
+
+  # Preserve your original naming convention
+  names(play) <- paste0(names(play), "_Play")
+  names(show) <- paste0(names(show), "_Show")
+  names(ride) <- paste0(names(ride), "_RA")
+  names(pref) <- paste0(names(pref), "_Preferred")
+
+  cantgeton <- compute_cantgeton(SurveyData, metadata)
+
+  weights <- data.frame(
+    q1 = SurveyData$q1,
+    play,
+    show,
+    ovpropex = SurveyData$ovpropex,
+    cantgeton = cantgeton,
+    ride,
+    pref,
+    Park = SurveyData$park,
+    FY = SurveyData$FY,
+    check.names = FALSE
+  )
+
+  # Match your downstream expectations
+  weights$ovpropex <- stats::relevel(factor(weights$ovpropex), ref = "5")
+  weights
+}
+
+# Internal helper: reproduce your odds->data.frame(z2,z1) pattern exactly, but once.
+.multinom_odds_df <- function(test, level) {
+  odds <- exp(stats::confint(test, level = level))
+  z1 <- apply(odds, 3L, c)
+  z2 <- expand.grid(dimnames(odds)[1:2])
+  data.frame(z2, z1, check.names = FALSE)
+}
+
+# Fit the multinom + glm for one park and return the three objects your script builds:
+# - weightedEEs_<park> (15 rows)
+# - weightsPref<park>  (5 rows)
+# - cantride_<park>    (1 row)
+fit_park_weights <- function(weights, park_id, yearauto, conf_level, conf_label) {
+  w <- weights[weights$Park == park_id & weights$FY == yearauto, , drop = FALSE]
+  # If there isn't enough data for the model, fail loudly (same as your current code would).
+  if (!nrow(w)) stop("No rows for Park=", park_id, " FY=", yearauto)
+
+  f_multi <- ovpropex ~ cantgeton +
+    one_Play + two_Play + three_Play + four_Play + five_Play +
+    one_Show + two_Show + three_Show + four_Show + five_Show +
+    one_RA + two_RA + three_RA + four_RA + five_RA +
+    one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred
+
+  f_glm <- (ovpropex == 5) ~
+    one_Play + two_Play + three_Play + four_Play + five_Play +
+    one_Show + two_Show + three_Show + four_Show + five_Show +
+    one_RA + two_RA + three_RA + four_RA + five_RA +
+    one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred
+
+  test <- nnet::multinom(f_multi, data = w, trace = FALSE)
+  df_all <- .multinom_odds_df(test, level = conf_level)
+
+  jz <- stats::glm(f_glm, data = w, family = "binomial")
+  EXPcol <- exp(stats::coef(jz)[-1])
+
+  # Exactly mirror your original row slicing.
+  core <- df_all[which(df_all$Var2 == conf_label &
+                         df_all$Var1 != "(Intercept)" &
+                         df_all$Var1 != "Attend" &
+                         df_all$Var1 != "cantgeton"), , drop = FALSE]
+
+  weightedEEs <- data.frame(core[1:15, , drop = FALSE], X5 = EXPcol[1:15], check.names = FALSE)
+  weightedEEs[weightedEEs$Var1 == "five_Play", 3:7] <- weightedEEs[weightedEEs$Var1 == "five_Play", 3:7] * 1
+  weightedEEs[weightedEEs$Var1 == "five_Show", 3:7] <- weightedEEs[weightedEEs$Var1 == "five_Show", 3:7] * 1
+
+  cantride <- data.frame(
+    df_all[which(df_all$Var2 == conf_label & df_all$Var1 == "cantgeton"), , drop = FALSE],
+    X5 = rep(1, 1),
+    check.names = FALSE
+  )
+
+  weightsPref <- data.frame(core[16:20, , drop = FALSE], X5 = EXPcol[16:20], check.names = FALSE)
+
+  list(weightedEEs = weightedEEs, cantride = cantride, weightsPref = weightsPref)
+}
+
+# Full drop-in replacement for your 4-park model block.
+# Returns:
+# - weights22
+# - CantRideWeight22
+build_weights22_all_parks <- function(weights, yearauto) {
+  cfg <- data.frame(
+    Park = c(1L, 2L, 3L, 4L),
+    conf_level = c(0.995, 0.99, 0.80, 0.70),
+    conf_label = c("99.8 %", "99.5 %", "90 %", "15 %"),
+    stringsAsFactors = FALSE
+  )
+
+  res <- lapply(seq_len(nrow(cfg)), function(i) {
+    fit_park_weights(
+      weights = weights,
+      park_id = cfg$Park[i],
+      yearauto = yearauto,
+      conf_level = cfg$conf_level[i],
+      conf_label = cfg$conf_label[i]
+    )
+  })
+
+  weightedEEs <- do.call(rbind, lapply(res, `[[`, "weightedEEs"))
+  weightsPref_list <- lapply(res, `[[`, "weightsPref")
+  cantride <- do.call(rbind, lapply(res, `[[`, "cantride"))
+
+  weights22 <- do.call(rbind, c(list(weightedEEs), weightsPref_list))
+  cantride2 <- data.frame(FY = yearauto, cantride, check.names = FALSE)
+  CantRideWeight22 <- cantride2[, -1, drop = FALSE]
+
+  list(weights22 = weights22, CantRideWeight22 = CantRideWeight22)
+}
