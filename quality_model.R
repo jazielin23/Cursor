@@ -73,11 +73,14 @@ QUALITY_FEATURE_DESCRIPTIONS <- list(
 .has_imager <- function() requireNamespace("imager", quietly = TRUE)
 .has_ranger <- function() requireNamespace("ranger", quietly = TRUE)
 .has_keras <- function() {
-  # keras in R uses reticulate; we need the *Python* tensorflow module to exist too.
+  # keras in R uses reticulate; we need the *Python* tensorflow module too.
   if (!requireNamespace("keras", quietly = TRUE)) return(FALSE)
+  # Prefer keras' own check if present
+  ok1 <- tryCatch(keras::is_keras_available(), error = function(e) NA)
+  if (isTRUE(ok1)) return(TRUE)
   if (!requireNamespace("reticulate", quietly = TRUE)) return(FALSE)
-  ok <- tryCatch(reticulate::py_module_available("tensorflow"), error = function(e) FALSE)
-  isTRUE(ok)
+  ok2 <- tryCatch(reticulate::py_module_available("tensorflow"), error = function(e) FALSE)
+  isTRUE(ok2)
 }
 
 .safe_is_image <- function(path) {
@@ -534,8 +537,12 @@ load_or_train_quality_model <- function(path = QUALITY_MODEL_PATH, model_type = 
   # Neural net is stored as: meta RDS + TensorFlow SavedModel directory.
   if (model_type == "nn") {
     if (!.has_keras()) {
-      # If keras isn't available, fall back to lm.
-      return(load_or_train_quality_model(path = path, model_type = "lm"))
+      stop(
+        "TensorFlow for keras is not installed. Run:\n",
+        "install.packages(c('keras','reticulate'))\n",
+        "keras::install_keras()\n",
+        call. = FALSE
+      )
     }
     model_dir <- paste0(base, "_", QUALITY_NN_MODEL_DIR)
     meta_path <- path2
@@ -597,7 +604,14 @@ predict_quality_grade <- function(model, features_named) {
   df <- as.data.frame(row, check.names = FALSE, stringsAsFactors = FALSE)
 
   if (!is.null(model$model_type) && model$model_type == "nn") {
-    if (!.has_keras()) return(NA_real_)
+    if (!.has_keras()) {
+      stop(
+        "TensorFlow for keras is not installed. Run:\n",
+        "install.packages(c('keras','reticulate'))\n",
+        "keras::install_keras()\n",
+        call. = FALSE
+      )
+    }
     x_mean <- model$x_mean
     x_sd <- model$x_sd
     if (is.null(x_mean) || is.null(x_sd)) {

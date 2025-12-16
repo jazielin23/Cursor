@@ -71,6 +71,7 @@ ui <- bslib::page_fillable(
             selected = "rf"
           ),
           uiOutput("nn_notice"),
+          uiOutput("nn_install_ui"),
           actionButton("predict", "Predict grade", class = "btn-primary"),
           downloadButton("download_result", "Download result (CSV)", class = "btn-outline-secondary"),
           tags$div(style = "height: 10px"),
@@ -142,10 +143,15 @@ ui <- bslib::page_fillable(
 
 server <- function(input, output, session) {
   cache <- reactiveValues(pred = new.env(parent = emptyenv()))
+  tf_log <- reactiveVal("")
+
+  tf_available <- reactive({
+    tryCatch(.has_keras(), error = function(e) FALSE)
+  })
 
   output$nn_notice <- renderUI({
     if (!identical(input$model_type, "nn")) return(NULL)
-    if (tryCatch(.has_keras(), error = function(e) FALSE)) return(NULL)
+    if (isTRUE(tf_available())) return(NULL)
     div(
       class = "alert alert-warning",
       role = "alert",
@@ -156,6 +162,53 @@ server <- function(input, output, session) {
         "install.packages(c('keras','reticulate'))\nkeras::install_keras()"
       )
     )
+  })
+
+  output$nn_install_ui <- renderUI({
+    if (!identical(input$model_type, "nn")) return(NULL)
+    if (isTRUE(tf_available())) {
+      return(div(class = "alert alert-success", role = "alert", "TensorFlow for keras is available."))
+    }
+    tagList(
+      actionButton("install_tf", "Install TensorFlow now", class = "btn-outline-warning"),
+      tags$details(
+        tags$summary(class = "text-muted", "show install / python details"),
+        tags$pre(class = "mt-2", verbatimTextOutput("tf_details", placeholder = TRUE))
+      )
+    )
+  })
+
+  observeEvent(input$install_tf, {
+    tf_log("")
+    withProgress(message = "Installing TensorFlow…", value = 0, {
+      incProgress(0.1, detail = "Ensuring R packages")
+      if (!requireNamespace("keras", quietly = TRUE)) install.packages("keras")
+      if (!requireNamespace("reticulate", quietly = TRUE)) install.packages("reticulate")
+
+      incProgress(0.4, detail = "Running keras::install_keras()")
+      out <- character(0)
+      out <- c(out, "Running keras::install_keras() ...")
+      out <- c(out, tryCatch(capture.output(keras::install_keras()), error = function(e) paste("ERROR:", conditionMessage(e))))
+
+      incProgress(0.8, detail = "Checking Python + TensorFlow")
+      py <- tryCatch(capture.output(reticulate::py_config()), error = function(e) paste("py_config ERROR:", conditionMessage(e)))
+      ok <- tryCatch(.has_keras(), error = function(e) FALSE)
+
+      out <- c(out, "", "reticulate::py_config():", py, "", paste0("TensorFlow available: ", ok))
+      tf_log(paste(out, collapse = "\n"))
+
+      incProgress(1, detail = "Done")
+    })
+
+    showModal(modalDialog(
+      title = "TensorFlow install finished",
+      "If TensorFlow still shows as unavailable, restart the Shiny app (and sometimes your R session) so reticulate picks up the new Python environment.",
+      easyClose = TRUE
+    ))
+  }, ignoreInit = TRUE)
+
+  output$tf_details <- renderText({
+    tf_log()
   })
 
   current_model <- reactive({
@@ -175,14 +228,6 @@ server <- function(input, output, session) {
       if (input$model_type == "rf" && !requireNamespace("ranger", quietly = TRUE)) {
         msg <- paste0(msg, " (Note: 'ranger' not installed; using linear model.)")
       }
-      if (input$model_type == "nn" && !tryCatch(.has_keras(), error = function(e) FALSE)) {
-        msg <- paste0(
-          msg,
-          " (Note: TensorFlow for keras is not installed yet. Install with: ",
-          "install.packages(c('keras','reticulate')); keras::install_keras()",
-          ")"
-        )
-      }
       div(class = "alert alert-info mb-0", role = "alert", msg)
     }
   })
@@ -197,6 +242,9 @@ server <- function(input, output, session) {
     validate(
       need(requireNamespace("magick", quietly = TRUE), "Package 'magick' is required. Install it with install.packages('magick').")
     )
+    if (identical(input$model_type, "nn") && !isTRUE(tf_available())) {
+      validate(need(FALSE, "TensorFlow for keras is not installed. Use the Install button in the sidebar or run keras::install_keras()."))
+    }
     mdl <- current_model()
     fp <- input$image$datapath
     key <- paste0(tools::md5sum(fp)[[1]], "::", mdl$version)
