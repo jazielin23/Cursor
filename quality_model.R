@@ -400,21 +400,49 @@ load_or_train_quality_model <- function(path = QUALITY_MODEL_PATH, model_type = 
   model_type <- match.arg(model_type)
   base <- sub("\\.rds$", "", path)
   path2 <- paste0(base, "_", model_type, ".rds")
-  if (file.exists(path2)) {
-    readRDS(path2)
-  } else if (file.exists(path)) {
-    # Back-compat (older artifact)
-    readRDS(path)
-  } else {
-    m <- train_fake_quality_model(model_type = model_type)
-    saveRDS(m, path2)
-    m
+  expected <- .feature_names
+
+  .is_valid_model <- function(m) {
+    is.list(m) && !is.null(m$fit) && !is.null(m$feature_names) && is.character(m$feature_names)
   }
+
+  .needs_retrain <- function(m) {
+    # Retrain if the feature set changed (e.g., older models had `edge_density`)
+    if (!.is_valid_model(m)) return(TRUE)
+    !identical(as.character(m$feature_names), expected)
+  }
+
+  if (file.exists(path2)) {
+    m <- readRDS(path2)
+    if (.needs_retrain(m)) {
+      m <- train_fake_quality_model(model_type = model_type)
+      saveRDS(m, path2)
+    }
+    return(m)
+  }
+
+  # Back-compat (older artifact), but migrate if it doesn't match current features.
+  if (file.exists(path)) {
+    m_old <- readRDS(path)
+    if (!.needs_retrain(m_old)) return(m_old)
+  }
+
+  m <- train_fake_quality_model(model_type = model_type)
+  saveRDS(m, path2)
+  m
 }
 
 predict_quality_grade <- function(model, features_named) {
-  df <- as.data.frame(as.list(features_named[model$feature_names]))
-  for (nm in names(df)) if (is.na(df[[nm]])) df[[nm]] <- 0
+  # Build a 1-row data.frame with scalar numerics.
+  # This avoids `predict.lm` errors like "variable lengths differ".
+  fns <- as.character(model$feature_names)
+  row <- lapply(fns, function(nm) {
+    v <- features_named[[nm]]
+    if (is.null(v) || length(v) == 0 || is.na(v[1])) return(0)
+    as.numeric(v[1])
+  })
+  names(row) <- fns
+  df <- as.data.frame(row, check.names = FALSE, stringsAsFactors = FALSE)
 
   if (!is.null(model$model_type) && model$model_type == "rf") {
     p <- stats::predict(model$fit, data = df)$predictions
