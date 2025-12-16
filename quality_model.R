@@ -4,22 +4,29 @@
 # Packages:
 #   install.packages(c("magick"))
 
-suppressPackageStartupMessages({
-  library(magick)
-})
+# NOTE: Do not `library(magick)` at load time. Some Shiny deploy targets will
+# start the app even if optional packages are missing; keeping these functions
+# defined avoids confusing "could not find function" errors.
 
 QUALITY_MODEL_PATH <- "quality_model.rds"
 
 .feature_names <- c("mean_luma", "sd_luma", "lap_var", "edge_density")
 
+.require_magick <- function() {
+  if (!requireNamespace("magick", quietly = TRUE)) {
+    stop("Package 'magick' is required. Install it with install.packages('magick').", call. = FALSE)
+  }
+}
+
 .read_gray_matrix <- function(image_path, max_size = 256) {
-  img <- image_read(image_path)
-  img <- image_auto_orient(img)
-  img <- image_scale(img, paste0(max_size, "x", max_size, ">"))
-  img <- image_convert(img, colorspace = "Gray")
+  .require_magick()
+  img <- magick::image_read(image_path)
+  img <- magick::image_auto_orient(img)
+  img <- magick::image_scale(img, paste0(max_size, "x", max_size, ">"))
+  img <- magick::image_convert(img, colorspace = "Gray")
 
   # image_data returns raw [0,255]; dim: channels x width x height
-  arr <- image_data(img, channels = "gray")
+  arr <- magick::image_data(img, channels = "gray")
   m <- as.integer(arr[1,,]) / 255
   list(img = img, gray = m)
 }
@@ -33,8 +40,8 @@ QUALITY_MODEL_PATH <- "quality_model.rds"
   k <- matrix(c(0, 1, 0,
                 1,-4, 1,
                 0, 1, 0), nrow = 3, byrow = TRUE)
-  lap <- image_convolve(gray_img, kernel = k)
-  d <- image_data(lap, channels = "gray")
+  lap <- magick::image_convolve(gray_img, kernel = k)
+  d <- magick::image_data(lap, channels = "gray")
   v <- as.numeric(as.integer(d[1,,]) / 255)
   stats::var(v)
 }
@@ -48,11 +55,11 @@ QUALITY_MODEL_PATH <- "quality_model.rds"
                   0, 0, 0,
                   1, 2, 1), nrow = 3, byrow = TRUE)
 
-  gx <- image_convolve(gray_img, kernel = kx)
-  gy <- image_convolve(gray_img, kernel = ky)
+  gx <- magick::image_convolve(gray_img, kernel = kx)
+  gy <- magick::image_convolve(gray_img, kernel = ky)
 
-  dx <- as.integer(image_data(gx, channels = "gray")[1,,]) / 255
-  dy <- as.integer(image_data(gy, channels = "gray")[1,,]) / 255
+  dx <- as.integer(magick::image_data(gx, channels = "gray")[1,,]) / 255
+  dy <- as.integer(magick::image_data(gy, channels = "gray")[1,,]) / 255
 
   mag <- abs(dx) + abs(dy)
   mean(mag > threshold)

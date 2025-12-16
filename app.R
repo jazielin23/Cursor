@@ -10,8 +10,16 @@ suppressPackageStartupMessages({
   library(shiny)
 })
 
-# Source helper functions into the *app environment* (important for some deploy modes)
-source("quality_model.R", local = TRUE)
+# Source helper functions into the *app environment* (important for some deploy modes).
+# Also make it robust if the working directory isn't the app directory.
+.quality_path <- "quality_model.R"
+if (!file.exists(.quality_path)) {
+  .ofile <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
+  if (!is.null(.ofile) && nzchar(.ofile)) {
+    .quality_path <- file.path(dirname(.ofile), "quality_model.R")
+  }
+}
+source(.quality_path, local = TRUE)
 
 model <- load_or_train_quality_model()
 
@@ -70,6 +78,9 @@ server <- function(input, output, session) {
 
   prediction <- eventReactive(input$predict, {
     req(input$image)
+    validate(
+      need(requireNamespace("magick", quietly = TRUE), "Package 'magick' is required. Install it with install.packages('magick').")
+    )
     feats <- extract_quality_features(input$image$datapath)
     grade <- predict_quality_grade(model, feats)
     list(grade = grade, feats = feats)
