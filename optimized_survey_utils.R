@@ -235,3 +235,26 @@ build_all_weights <- function(SurveyData, metadata, yearauto, FQ = NULL) {
   out$weights <- weights
   out
 }
+
+# Optional auto-run on source().
+# If you set: options(optimized_survey_utils.autorun = TRUE)
+# and the following objects exist in the global environment:
+#   SurveyData, metadata, yearauto, FQ
+# then sourcing this file will create/overwrite:
+#   weights, weights22, CantRideWeight22
+if (isTRUE(getOption("optimized_survey_utils.autorun", FALSE))) {
+  needed <- c("SurveyData", "metadata", "yearauto", "FQ")
+  ok <- all(vapply(needed, exists, logical(1), envir = .GlobalEnv))
+  if (ok) {
+    .out <- build_all_weights(
+      SurveyData = get("SurveyData", envir = .GlobalEnv),
+      metadata = get("metadata", envir = .GlobalEnv),
+      yearauto = get("yearauto", envir = .GlobalEnv),
+      FQ = get("FQ", envir = .GlobalEnv)
+    )
+    assign("weights", .out$weights, envir = .GlobalEnv)
+    assign("weights22", .out$weights22, envir = .GlobalEnv)
+    assign("CantRideWeight22", .out$CantRideWeight22, envir = .GlobalEnv)
+    rm(.out, envir = environment())
+  }
+}
