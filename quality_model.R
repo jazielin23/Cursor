@@ -64,7 +64,13 @@ QUALITY_FEATURE_DESCRIPTIONS <- list(
 
 .has_imager <- function() requireNamespace("imager", quietly = TRUE)
 .has_ranger <- function() requireNamespace("ranger", quietly = TRUE)
-.has_keras <- function() requireNamespace("keras", quietly = TRUE) && requireNamespace("tensorflow", quietly = TRUE)
+.has_keras <- function() {
+  # keras in R uses reticulate; we need the *Python* tensorflow module to exist too.
+  if (!requireNamespace("keras", quietly = TRUE)) return(FALSE)
+  if (!requireNamespace("reticulate", quietly = TRUE)) return(FALSE)
+  ok <- tryCatch(reticulate::py_module_available("tensorflow"), error = function(e) FALSE)
+  isTRUE(ok)
+}
 
 .safe_is_image <- function(path) {
   ext <- tolower(tools::file_ext(path))
@@ -400,8 +406,10 @@ train_fake_quality_model <- function(n = 6000, seed = 7, model_type = c("lm", "r
     x_sd[x_sd == 0] <- 1
     Xs <- scale(X, center = x_mean, scale = x_sd)
 
-    # Reproducibility (best-effort)
-    try(tensorflow::tf$random$set_seed(as.integer(seed)), silent = TRUE)
+    # Reproducibility (best-effort) - avoid hard dependency on R tensorflow package
+    if (requireNamespace("keras", quietly = TRUE)) {
+      try(keras::set_random_seed(as.integer(seed)), silent = TRUE)
+    }
 
     fit <- keras::keras_model_sequential() |>
       keras::layer_dense(units = 64, activation = "relu", input_shape = ncol(Xs)) |>
