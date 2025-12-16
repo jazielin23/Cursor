@@ -22,6 +22,10 @@ QUALITY_NN_MODEL_DIR <- "nn_tf"
   "pct_clipped_black",
   "pct_highlights",
   "pct_clipped_white",
+  "uv_proxy_mean",
+  "uv_proxy_sd",
+  "ir_proxy_mean",
+  "ir_proxy_sd",
   "lap_var",
   "tenengrad",
   "edge_density_sobel",
@@ -43,6 +47,10 @@ QUALITY_FEATURE_DESCRIPTIONS <- list(
   pct_clipped_black = "Fraction of pixels near pure black (<0.01).",
   pct_highlights = "Fraction of bright highlights (>0.95).",
   pct_clipped_white = "Fraction of pixels near pure white (>0.99).",
+  uv_proxy_mean = "Synthetic UV proxy from RGB (NOT real UV).",
+  uv_proxy_sd = "Synthetic UV proxy variability (NOT real UV).",
+  ir_proxy_mean = "Synthetic IR proxy from RGB (NOT real IR).",
+  ir_proxy_sd = "Synthetic IR proxy variability (NOT real IR).",
   lap_var = "Laplacian variance (sharpness; higher is sharper).",
   tenengrad = "Sobel energy (sharpness/edge strength).",
   edge_density_sobel = "Fraction of pixels with strong Sobel gradient.",
@@ -118,6 +126,41 @@ get_image_info <- function(image_path) {
   if (length(dim(m)) > 2) m <- m[, , 1, drop = TRUE]
   m <- as.matrix(m)
   list(img = img, m = m)
+}
+
+.read_rgb <- function(image_path, max_size = 256) {
+  img <- .safe_image_read(image_path)
+
+  # Some magick versions don't export image_auto_orient(); auto-orient is optional.
+  ns <- asNamespace("magick")
+  auto_orient <- get0("image_auto_orient", envir = ns, inherits = FALSE)
+  if (is.function(auto_orient)) img <- auto_orient(img)
+
+  img <- magick::image_scale(img, paste0(max_size, "x", max_size, ">"))
+  img <- magick::image_convert(img, colorspace = "RGB")
+
+  arr <- magick::image_data(img, channels = "rgb") # 3 x width x height
+  r <- as.integer(arr[1, , , drop = TRUE]) / 255
+  g <- as.integer(arr[2, , , drop = TRUE]) / 255
+  b <- as.integer(arr[3, , , drop = TRUE]) / 255
+  if (length(dim(r)) > 2) r <- r[, , 1, drop = TRUE]
+  if (length(dim(g)) > 2) g <- g[, , 1, drop = TRUE]
+  if (length(dim(b)) > 2) b <- b[, , 1, drop = TRUE]
+  list(img = img, r = as.matrix(r), g = as.matrix(g), b = as.matrix(b))
+}
+
+.uv_ir_proxies <- function(r, g, b) {
+  # IMPORTANT: These are NOT true UV/IR measurements.
+  # They are heuristic proxies derived from RGB only.
+  denom <- r + g + b + 1e-6
+  uv_proxy <- b / denom            # relative blue energy
+  ir_proxy <- r                    # red channel as crude "IR leakage" proxy
+  list(
+    uv_mean = mean(uv_proxy),
+    uv_sd = stats::sd(as.numeric(uv_proxy)),
+    ir_mean = mean(ir_proxy),
+    ir_sd = stats::sd(as.numeric(ir_proxy))
+  )
 }
 
 .moments <- function(x) {
@@ -266,6 +309,10 @@ get_image_info <- function(image_path) {
 }
 
 extract_quality_features <- function(image_path) {
+  # Work from RGB (for UV/IR proxies) and grayscale (for most features).
+  xr <- .read_rgb(image_path)
+  prox <- .uv_ir_proxies(xr$r, xr$g, xr$b)
+
   x <- .read_gray(image_path)
   m <- x$m
   img <- x$img
@@ -295,6 +342,10 @@ extract_quality_features <- function(image_path) {
     pct_clipped_black = as.numeric(pct_clipped_black),
     pct_highlights = as.numeric(pct_highlights),
     pct_clipped_white = as.numeric(pct_clipped_white),
+    uv_proxy_mean = as.numeric(prox$uv_mean),
+    uv_proxy_sd = as.numeric(prox$uv_sd),
+    ir_proxy_mean = as.numeric(prox$ir_mean),
+    ir_proxy_sd = as.numeric(prox$ir_sd),
     lap_var = as.numeric(lap_var),
     tenengrad = as.numeric(tenengrad),
     edge_density_sobel = as.numeric(edge_density_sobel),
@@ -321,6 +372,10 @@ train_fake_quality_model <- function(n = 6000, seed = 7, model_type = c("lm", "r
   pct_clipped_black <- pmin(pmax(stats::rnorm(n, 0.02, 0.03), 0), 0.4)
   pct_highlights <- pmin(pmax(stats::rnorm(n, 0.04, 0.05), 0), 0.5)
   pct_clipped_white <- pmin(pmax(stats::rnorm(n, 0.01, 0.02), 0), 0.3)
+  uv_proxy_mean <- stats::runif(n, 0.10, 0.60)
+  uv_proxy_sd <- stats::runif(n, 0.00, 0.15)
+  ir_proxy_mean <- stats::runif(n, 0.05, 0.95)
+  ir_proxy_sd <- stats::runif(n, 0.00, 0.20)
 
   lap_var <- stats::rlnorm(n, meanlog = -5.0, sdlog = 1.0)
   lap_var <- pmin(pmax(lap_var, 0), 0.35)
@@ -351,6 +406,8 @@ train_fake_quality_model <- function(n = 6000, seed = 7, model_type = c("lm", "r
       0.6 * centering_penalty -
       0.4 * pct_clipped_black -
       0.5 * pct_clipped_white +
+      0.05 * (uv_proxy_mean - 0.3) -
+      0.05 * (ir_proxy_mean - 0.5) +
       0.2 * (gabor_energy_0 + gabor_energy_90) +
       0.15 * lbp_entropy
   ) + stats::rnorm(n, 0, 0.8)
@@ -364,6 +421,10 @@ train_fake_quality_model <- function(n = 6000, seed = 7, model_type = c("lm", "r
     pct_clipped_black = pct_clipped_black,
     pct_highlights = pct_highlights,
     pct_clipped_white = pct_clipped_white,
+    uv_proxy_mean = uv_proxy_mean,
+    uv_proxy_sd = uv_proxy_sd,
+    ir_proxy_mean = ir_proxy_mean,
+    ir_proxy_sd = ir_proxy_sd,
     lap_var = lap_var,
     tenengrad = tenengrad,
     edge_density_sobel = edge_density_sobel,
