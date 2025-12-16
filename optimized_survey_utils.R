@@ -236,6 +236,16 @@ build_all_weights <- function(SurveyData, metadata, yearauto, FQ = NULL) {
   out
 }
 
+# Convenience: builds and assigns into the *calling* environment.
+# Use this inside parallel workers to ensure `weights22` exists in that task.
+build_and_assign_all_weights <- function(SurveyData, metadata, yearauto, FQ = NULL) {
+  out <- build_all_weights(SurveyData, metadata, yearauto, FQ = FQ)
+  assign("weights", out$weights, envir = parent.frame())
+  assign("weights22", out$weights22, envir = parent.frame())
+  assign("CantRideWeight22", out$CantRideWeight22, envir = parent.frame())
+  invisible(out)
+}
+
 # Optional auto-run on source().
 # If you set: options(optimized_survey_utils.autorun = TRUE)
 # and the following objects exist in the global environment:
