@@ -170,7 +170,7 @@ server <- function(input, output, session) {
       return(div(class = "alert alert-success", role = "alert", "TensorFlow for keras is available."))
     }
     tagList(
-      actionButton("install_tf", "Install TensorFlow now", class = "btn-outline-warning"),
+      actionButton("install_tf", "Generate install script", class = "btn-outline-warning"),
       tags$details(
         tags$summary(class = "text-muted", "show install / python details"),
         tags$pre(class = "mt-2", verbatimTextOutput("tf_details", placeholder = TRUE))
@@ -179,36 +179,39 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$install_tf, {
-    tf_log("")
-    withProgress(message = "Installing TensorFlow…", value = 0, {
-      incProgress(0.1, detail = "Ensuring R packages")
-      if (!requireNamespace("keras", quietly = TRUE)) install.packages("keras")
-      if (!requireNamespace("reticulate", quietly = TRUE)) install.packages("reticulate")
-
-      incProgress(0.4, detail = "Running keras::install_keras()")
-      out <- character(0)
-      out <- c(out, "Running keras::install_keras() ...")
-      out <- c(out, tryCatch(capture.output(keras::install_keras()), error = function(e) paste("ERROR:", conditionMessage(e))))
-
-      incProgress(0.8, detail = "Checking Python + TensorFlow")
-      py <- tryCatch(capture.output(reticulate::py_config()), error = function(e) paste("py_config ERROR:", conditionMessage(e)))
-      ok <- tryCatch(.has_keras(), error = function(e) FALSE)
-
-      out <- c(out, "", "reticulate::py_config():", py, "", paste0("TensorFlow available: ", ok))
-      tf_log(paste(out, collapse = "\n"))
-
-      incProgress(1, detail = "Done")
-    })
+    # IMPORTANT (Windows/reticulate): installing TF in-process frequently fails due
+    # to DLL-in-use errors once Python/keras/tensorflow have been initialized.
+    # Instead, generate a script the user can run in a fresh R session.
+    script_path <- normalizePath(file.path(getwd(), "install_tensorflow.R"), winslash = "/", mustWork = FALSE)
+    if (!file.exists(script_path)) {
+      tf_log(paste0(
+        "Install script not found at:\n", script_path, "\n\n",
+        "Create it by pulling latest repo changes, or create a file named install_tensorflow.R in this folder."
+      ))
+    } else {
+      tf_log(paste0(
+        "Generated install instructions.\n\n",
+        "1) Close this Shiny app.\n",
+        "2) Restart R (fresh session).\n",
+        "3) Run:\n\n",
+        "source('", script_path, "')\n\n",
+        "If your Python is 3.13, you will likely need Python 3.11 or 3.12 for TensorFlow.\n"
+      ))
+    }
 
     showModal(modalDialog(
-      title = "TensorFlow install finished",
-      "If TensorFlow still shows as unavailable, restart the Shiny app (and sometimes your R session) so reticulate picks up the new Python environment.",
+      title = "TensorFlow install requires a fresh R session",
+      tags$p("On Windows, TensorFlow/keras installation cannot reliably run inside a live Shiny session once Python has initialized."),
+      tags$p("Close the app, restart R, then run:"),
+      tags$pre(paste0("source('", script_path, "')")),
       easyClose = TRUE
     ))
   }, ignoreInit = TRUE)
 
   output$tf_details <- renderText({
-    tf_log()
+    # Always show current python config too, to help debugging.
+    py <- tryCatch(capture.output(reticulate::py_config()), error = function(e) paste("py_config ERROR:", conditionMessage(e)))
+    paste(c(tf_log(), "", "Current reticulate::py_config():", py), collapse = "\n")
   })
 
   current_model <- reactive({
