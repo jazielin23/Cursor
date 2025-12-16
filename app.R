@@ -220,7 +220,9 @@ server <- function(input, output, session) {
     res <- withProgress(message = "Scoring image…", value = 0, {
       incProgress(0.2, detail = "Extracting features")
       feats <- tryCatch(extract_quality_features(input$image$datapath), error = function(e) e)
-      if (inherits(feats, "error")) stop(conditionMessage(feats), call. = FALSE)
+      if (inherits(feats, "error")) {
+        stop(paste0("Feature extraction failed: ", conditionMessage(feats)), call. = FALSE)
+      }
 
       incProgress(0.6, detail = "Predicting grade")
       mdl <- current_model()

@@ -74,7 +74,12 @@ QUALITY_FEATURE_DESCRIPTIONS <- list(
     stop("Unsupported file type. Please upload PNG/JPG/WebP/GIF.", call. = FALSE)
   }
   tryCatch(
-    magick::image_read(image_path),
+    {
+      img <- magick::image_read(image_path)
+      # For multi-frame images (e.g., GIF), use the first frame only.
+      if (length(img) > 1) img <- img[1]
+      img
+    },
     error = function(e) stop("Could not read image (unsupported or corrupt file).", call. = FALSE)
   )
 }
@@ -100,6 +105,9 @@ get_image_info <- function(image_path) {
 
   arr <- magick::image_data(img, channels = "gray")
   m <- as.integer(arr[1, , , drop = TRUE]) / 255
+  # Defensive: some formats can still yield an extra dimension.
+  if (length(dim(m)) > 2) m <- m[, , 1, drop = TRUE]
+  m <- as.matrix(m)
   list(img = img, m = m)
 }
 
