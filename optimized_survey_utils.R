@@ -225,3 +225,13 @@ build_weights22_all_parks <- function(weights, yearauto) {
 
   list(weights22 = weights22, CantRideWeight22 = CantRideWeight22)
 }
+
+# One-call convenience: from SurveyData + metadata -> (weights, weights22, CantRideWeight22).
+# This prevents "weights22 not found" by ensuring everything is created in-order.
+build_all_weights <- function(SurveyData, metadata, yearauto, FQ = NULL) {
+  if (!is.null(FQ)) SurveyData <- filter_quarter(SurveyData, FQ)
+  weights <- build_weights_inputs(SurveyData, metadata, yearauto)
+  out <- build_weights22_all_parks(weights, yearauto)
+  out$weights <- weights
+  out
+}
