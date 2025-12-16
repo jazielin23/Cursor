@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Image Quality Grader (0–10)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 40px; max-width: 900px; }
+    .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 18px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .muted { color: #6b7280; font-size: 14px; }
+    button { padding: 10px 14px; border-radius: 10px; border: 1px solid #111827; background: #111827; color: white; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    input[type=file] { width: 100%; }
+    img { max-width: 100%; border-radius: 10px; border: 1px solid #e5e7eb; }
+    pre { background: #0b1020; color: #e5e7eb; padding: 12px; border-radius: 10px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h2>Image Quality Grader (demo)</h2>
+  <p class="muted">Upload an image and get a predicted quality score from 0 to 10 (trained on fake data).</p>
+
+  <div class="row">
+    <div class="card">
+      <h3>Upload</h3>
+      <input id="file" type="file" accept="image/*" />
+      <div style="height: 12px"></div>
+      <button id="btn" disabled>Predict grade</button>
+      <div style="height: 12px"></div>
+      <div id="status" class="muted"></div>
+      <h3 style="margin-top: 18px">Result</h3>
+      <div id="result" style="font-size: 22px; font-weight: 700;">—</div>
+      <div class="muted">(0 = worst, 10 = best)</div>
+      <div style="height: 12px"></div>
+      <details>
+        <summary class="muted">show raw response</summary>
+        <pre id="raw">—</pre>
+      </details>
+    </div>
+
+    <div class="card">
+      <h3>Preview</h3>
+      <img id="preview" alt="preview" />
+    </div>
+  </div>
+
+<script>
+  const fileEl = document.getElementById('file');
+  const btn = document.getElementById('btn');
+  const preview = document.getElementById('preview');
+  const statusEl = document.getElementById('status');
+  const resultEl = document.getElementById('result');
+  const rawEl = document.getElementById('raw');
+
+  let currentFile = null;
+
+  fileEl.addEventListener('change', () => {
+    const f = fileEl.files && fileEl.files[0];
+    currentFile = f || null;
+    btn.disabled = !currentFile;
+    resultEl.textContent = '—';
+    rawEl.textContent = '—';
+    statusEl.textContent = '';
+
+    if (currentFile) {
+      const url = URL.createObjectURL(currentFile);
+      preview.src = url;
+    } else {
+      preview.removeAttribute('src');
+    }
+  });
+
+  btn.addEventListener('click', async () => {
+    if (!currentFile) return;
+
+    btn.disabled = true;
+    statusEl.textContent = 'Uploading and predicting…';
+    resultEl.textContent = '…';
+
+    try {
+      const fd = new FormData();
+      fd.append('image', currentFile);
+
+      const res = await fetch('/predict', { method: 'POST', body: fd });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data && data.detail ? data.detail : 'Request failed');
+      }
+
+      const grade = Number(data.grade);
+      resultEl.textContent = isFinite(grade) ? grade.toFixed(1) : String(data.grade);
+      rawEl.textContent = JSON.stringify(data, null, 2);
+      statusEl.textContent = 'Done.';
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+      resultEl.textContent = '—';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
